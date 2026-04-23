@@ -332,6 +332,12 @@ curl -X POST http://localhost:8088/api/v1/app/taskapi/tasks \
 | dataset.randomSeed | integer | 是 | 随机种子 |
 | prompt | string | 否 | 自定义测试 Prompt |
 | techniques | array | 否 | 测试技术列表，如 ["jailbreak", "adversarial"] |
+| provider | string | 否 | 执行引擎：`prompt_security`（默认）或 `garak` |
+| garak.mode | string | 否 | Garak 执行模式：`cli`（默认）或 `python_api` |
+| garak.probe_types | array | 否 | Garak 探针列表，例如 `["promptinject","xss"]` |
+| garak.task_description | string | 否 | Garak 任务描述（用于日志/报告） |
+| garak.output_path | string | 否 | Garak 报告输出前缀/路径 |
+| garak.extra_args | array | 否 | 透传给 garak 的额外命令行参数 |
 
 #### 支持的数据集说明
 
@@ -387,6 +393,30 @@ def model_redteam_test():
 # 使用示例
 result = model_redteam_test()
 print(f"大模型安全体检任务创建成功，会话ID: {result['data']['session_id']}")
+```
+
+#### Garak Provider 示例
+```json
+{
+  "type": "model_redteam_report",
+  "content": {
+    "provider": "garak",
+    "model": [
+      {
+        "model": "gpt-4o-mini",
+        "token": "sk-your-api-key",
+        "base_url": "https://api.openai.com/v1"
+      }
+    ],
+    "garak": {
+      "mode": "python_api",
+      "probe_types": ["promptinject", "xss"],
+      "task_description": "MVP garak 安全检测",
+      "output_path": "/tmp/garak-report",
+      "extra_args": ["--parallel_attempts", "1"]
+    }
+  }
+}
 ```
 
 #### 不同数据集组合示例

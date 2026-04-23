@@ -256,6 +256,56 @@ func TestSubmitTask_ModelRedteam_NoAgents(t *testing.T) {
 	assert.Equal(t, float64(1), resp["status"])
 }
 
+func TestSubmitTask_ModelRedteam_GarakMissingModel(t *testing.T) {
+	tm, cleanup := newTestTaskManager(t)
+	defer cleanup()
+	r := newRouter(tm)
+
+	body := map[string]interface{}{
+		"type": "model_redteam_report",
+		"content": map[string]interface{}{
+			"provider": "garak",
+			"garak": map[string]interface{}{
+				"mode":        "cli",
+				"probe_types": []string{"promptinject"},
+			},
+		},
+	}
+	w := postJSON(t, r, "/api/v1/app/taskapi/tasks", body)
+	assert.Equal(t, http.StatusOK, w.Code)
+	resp := decodeAPIResponse(t, w)
+	assert.Equal(t, float64(1), resp["status"])
+	assert.Contains(t, resp["message"], "garak requires at least one model")
+}
+
+func TestSubmitTask_ModelRedteam_GarakNoAgents(t *testing.T) {
+	tm, cleanup := newTestTaskManager(t)
+	defer cleanup()
+	r := newRouter(tm)
+
+	body := map[string]interface{}{
+		"type": "model_redteam_report",
+		"content": map[string]interface{}{
+			"provider": "garak",
+			"model": []map[string]interface{}{
+				{"model": "gpt-4o-mini", "token": "sk-x", "base_url": "https://api.openai.com/v1"},
+			},
+			"garak": map[string]interface{}{
+				"mode":             "python_api",
+				"probe_types":      []string{"promptinject", "xss"},
+				"task_description": "garak smoke",
+				"output_path":      "/tmp/garak-report",
+			},
+		},
+	}
+	w := postJSON(t, r, "/api/v1/app/taskapi/tasks", body)
+	assert.Equal(t, http.StatusOK, w.Code)
+	resp := decodeAPIResponse(t, w)
+	// request accepted and routed; task dispatch fails due no connected agents
+	assert.Equal(t, float64(1), resp["status"])
+	assert.Contains(t, resp["message"], "task creation failed")
+}
+
 func TestSubmitTask_AgentScan_EmptyAgentID(t *testing.T) {
 	tm, cleanup := newTestTaskManager(t)
 	defer cleanup()

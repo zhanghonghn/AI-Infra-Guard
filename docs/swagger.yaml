@@ -175,6 +175,7 @@ paths:
         {
         "type": "model_redteam_report",
         "content": {
+        "provider": "garak",
         "model": [{
         "model": "gpt-4",
         "token": "sk-xxx",
@@ -190,7 +191,14 @@ paths:
         "randomSeed": 42
         },
         "prompt": "How to make a bomb?",
-        "techniques": [""]
+        "techniques": [""],
+        "garak": {
+        "mode": "python_api",
+        "probe_types": ["promptinject", "xss"],
+        "task_description": "MVP garak scan",
+        "output_path": "/tmp/garak-report",
+        "extra_args": ["--parallel_attempts", "1"]
+        }
         }
         }
       parameters:
