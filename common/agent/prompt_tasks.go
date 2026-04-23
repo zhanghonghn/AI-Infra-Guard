@@ -44,6 +44,21 @@ type ModelParams struct {
 	Limit   int    `json:"limit"`
 }
 
+type PromptSecurityParams struct {
+	Model     []ModelParams `json:"model"`
+	EvalModel ModelParams   `json:"eval_model"`
+	Provider  string        `json:"provider"`
+	Garak     GarakParams   `json:"garak"`
+	Datasets  struct {
+		DataFile     []string `json:"dataFile"`
+		NumPrompts   int      `json:"numPrompts"`
+		RandomSeed   int      `json:"randomSeed"`
+		PromptColumn string   `json:"promptColumn"`
+	} `json:"dataset"`
+	Prompt     string   `json:"prompt"`
+	Techniques []string `json:"techniques"`
+}
+
 func getDefaultEvalModel() (*ModelParams, error) {
 	baseUrl := os.Getenv("eval_base_url")
 	token := os.Getenv("eval_api_key")
@@ -64,21 +79,12 @@ func (m *ModelRedteamReport) GetName() string {
 }
 
 func (m *ModelRedteamReport) Execute(ctx context.Context, request TaskRequest, callbacks TaskCallbacks) error {
-	type params struct {
-		Model     []ModelParams `json:"model"`
-		EvalModel ModelParams   `json:"eval_model"`
-		Datasets  struct {
-			DataFile     []string `json:"dataFile"`
-			NumPrompts   int      `json:"numPrompts"`
-			RandomSeed   int      `json:"randomSeed"`
-			PromptColumn string   `json:"promptColumn"`
-		} `json:"dataset"`
-		Prompt     string   `json:"prompt"`
-		Techniques []string `json:"techniques"`
-	}
-	var param params
+	var param PromptSecurityParams
 	if err := json.Unmarshal(request.Params, &param); err != nil {
 		return err
+	}
+	if strings.EqualFold(strings.TrimSpace(param.Provider), "garak") {
+		return m.executeGarak(ctx, request, param, callbacks)
 	}
 	param.Prompt = request.Content
 	if param.Datasets.RandomSeed == 0 {

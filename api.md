@@ -374,6 +374,12 @@ Used to perform Jailbreak Evaluation testing on LLM to assess their security and
 | dataset.randomSeed | integer | Yes | Random seed |
 | prompt | string | No | Custom test prompt |
 | techniques | array | No | List of testing techniques, e.g., ["jailbreak", "adversarial"] |
+| provider | string | No | Engine provider: `prompt_security` (default) or `garak` |
+| garak.mode | string | No | Garak execution mode: `cli` (default) or `python_api` |
+| garak.probe_types | array | No | Garak probe list, e.g., `["promptinject","xss"]` |
+| garak.task_description | string | No | Garak task description shown in logs/reports |
+| garak.output_path | string | No | Garak report output prefix/path |
+| garak.extra_args | array | No | Extra CLI args passed to garak |
 
 #### Supported Dataset Descriptions
 
@@ -429,6 +435,30 @@ def model_redteam_test():
 # Usage example
 result = model_redteam_test()
 print(f"Jailbreak Evaluation task created successfully, session ID: {result['data']['session_id']}")
+```
+
+#### Garak Provider Example
+```json
+{
+  "type": "model_redteam_report",
+  "content": {
+    "provider": "garak",
+    "model": [
+      {
+        "model": "gpt-4o-mini",
+        "token": "sk-your-api-key",
+        "base_url": "https://api.openai.com/v1"
+      }
+    ],
+    "garak": {
+      "mode": "python_api",
+      "probe_types": ["promptinject", "xss"],
+      "task_description": "MVP garak security check",
+      "output_path": "/tmp/garak-report",
+      "extra_args": ["--parallel_attempts", "1"]
+    }
+  }
+}
 ```
 
 #### Different Dataset Combination Examples

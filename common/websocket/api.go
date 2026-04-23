@@ -56,8 +56,8 @@ type ModelParams struct {
 type MCPTaskRequest struct {
 	Prompt string `json:"prompt,omitempty" example:"Enter a URL for remote MCP scan, or leave empty for source-code scan"` // Scan description or MCP server URL
 	Model  struct {
-		Model   string `json:"model" example:"gpt-4"`                         // Model name - required
-		Token   string `json:"token" example:"sk-xxx"`                                   // API key - required
+		Model   string `json:"model" example:"gpt-4"`                                  // Model name - required
+		Token   string `json:"token" example:"sk-xxx"`                                 // API key - required
 		BaseUrl string `json:"base_url,omitempty" example:"https://api.openai.com/v1"` // Base URL - optional
 	} `json:"model"` // Model configuration - required
 	Thread      int               `json:"thread,omitempty" example:"4"`              // Concurrent thread count
@@ -90,7 +90,15 @@ type AIInfraScanTaskRequest struct {
 type PromptSecurityTaskRequest struct {
 	Model     []ModelParams `json:"model"`      // List of models under test
 	EvalModel ModelParams   `json:"eval_model"` // Evaluation model configuration
-	Datasets  struct {
+	Provider  string        `json:"provider"`   // Execution provider: prompt_security(default) | garak
+	Garak     struct {
+		Mode            string   `json:"mode"`             // garak mode: cli(default) | python_api
+		ProbeTypes      []string `json:"probe_types"`      // garak probes
+		TaskDescription string   `json:"task_description"` // task description
+		OutputPath      string   `json:"output_path"`      // report prefix/output path
+		ExtraArgs       []string `json:"extra_args"`       // additional garak args
+	} `json:"garak"` // garak-specific options
+	Datasets struct {
 		DataFile   []string `json:"dataFile" example:"[\"JailBench-Tiny\",\"JailbreakPrompts-Tiny\"]"` // Dataset file list
 		NumPrompts int      `json:"numPrompts" example:"100"`                                          // Number of prompts
 		RandomSeed int      `json:"randomSeed" example:"42"`                                           // Random seed
@@ -103,28 +111,28 @@ type PromptSecurityTaskRequest struct {
 // @Description Agent security scan task parameters. agent_id and agent_config are mutually exclusive:
 // agent_id references a config pre-saved on the server; agent_config passes YAML content inline without prior saving.
 type AgentScanTaskRequest struct {
-	AgentID     string      `json:"agent_id,omitempty" example:"demo-agent"`                              // Agent config name (mutually exclusive with agent_config)
-	AgentConfig string      `json:"agent_config,omitempty" example:"provider: dify\nbase_url: ..."`       // Inline YAML config content (mutually exclusive with agent_id)
-	EvalModel   ModelParams `json:"eval_model"`                                                           // Evaluation model config - optional, falls back to system default
-	Language    string      `json:"language,omitempty" example:"zh"`                                      // Language code - optional
+	AgentID     string      `json:"agent_id,omitempty" example:"demo-agent"`                                         // Agent config name (mutually exclusive with agent_config)
+	AgentConfig string      `json:"agent_config,omitempty" example:"provider: dify\nbase_url: ..."`                  // Inline YAML config content (mutually exclusive with agent_id)
+	EvalModel   ModelParams `json:"eval_model"`                                                                      // Evaluation model config - optional, falls back to system default
+	Language    string      `json:"language,omitempty" example:"zh"`                                                 // Language code - optional
 	Prompt      string      `json:"prompt,omitempty" example:"Focus on privilege escalation and data leakage risks"` // Additional scan instructions - optional
 }
 
 // APIResponse is the common API response structure
 type APIResponse struct {
-	Status  int         `json:"status" example:"0"`     // Status code: 0=success, 1=failure
-	Message string      `json:"message" example:"ok"`     // Response message
-	Data    interface{} `json:"data"`     // Response data
+	Status  int         `json:"status" example:"0"`   // Status code: 0=success, 1=failure
+	Message string      `json:"message" example:"ok"` // Response message
+	Data    interface{} `json:"data"`                 // Response data
 }
 
 // TaskStatusResponse holds the task status response
 type TaskStatusResponse struct {
 	SessionID string `json:"session_id" example:"550e8400-e29b-41d4-a716-446655440000"` // Task session ID
 	Status    string `json:"status" example:"running"`                                  // Task status: pending, running, completed, failed
-	Title     string `json:"title" example:"MCP Scan Task"`                                   // Task title
+	Title     string `json:"title" example:"MCP Scan Task"`                             // Task title
 	CreatedAt int64  `json:"created_at" example:"1640995200000"`                        // Creation timestamp (ms)
 	UpdatedAt int64  `json:"updated_at" example:"1640995200000"`                        // Last update timestamp (ms)
-	Log       string `json:"log" example:"Task execution log..."`                           // Task execution log
+	Log       string `json:"log" example:"Task execution log..."`                       // Task execution log
 }
 
 // TaskCreateResponse holds the task creation response
@@ -353,11 +361,35 @@ func SubmitTask(c *gin.Context, tm *TaskManager) {
 			})
 			return
 		}
+		provider := strings.ToLower(strings.TrimSpace(req.Provider))
+		if provider == "" {
+			provider = "prompt_security"
+		}
+		if provider != "prompt_security" && provider != "garak" {
+			c.JSON(http.StatusOK, gin.H{
+				"status":  1,
+				"message": "invalid parameters: unsupported provider for model_redteam_report",
+				"data":    nil,
+			})
+			return
+		}
+		if provider == "garak" {
+			if len(req.Model) == 0 || strings.TrimSpace(req.Model[0].Model) == "" {
+				c.JSON(http.StatusOK, gin.H{
+					"status":  1,
+					"message": "invalid parameters: garak requires at least one model configuration",
+					"data":    nil,
+				})
+				return
+			}
+		}
 		params := map[string]interface{}{
 			"model":      req.Model,
 			"eval_model": req.EvalModel,
 			"dataset":    req.Datasets,
 			"techniques": req.Techniques,
+			"provider":   provider,
+			"garak":      req.Garak,
 		}
 		taskReq = TaskCreateRequest{
 			ID:          messageId,

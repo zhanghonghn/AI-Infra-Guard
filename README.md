@@ -135,6 +135,13 @@ cd AI-Infra-Guard
 docker-compose up -d
 ```
 
+**Optional: enable `garak` provider for `model_redteam_report`**
+```bash
+# install garak in the runtime where the agent process runs
+python3 -m pip install "garak>=0.10.0"
+```
+When submitting a redteam task, set `content.provider` to `garak` and pass `content.garak` options (`mode`, `probe_types`, `output_path`, etc.).
+
 Note: The AI-Infra-Guard project is positioned as an AI red teaming platform for internal use by enterprises or individuals. It currently lacks an authentication mechanism and should not be deployed on public networks.
 
 For more information, see: [https://tencent.github.io/AI-Infra-Guard/?menu=getting-started](https://tencent.github.io/AI-Infra-Guard/?menu=getting-started)
