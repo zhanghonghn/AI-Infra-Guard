@@ -43,6 +43,11 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
+const (
+	ProviderPromptSecurity = "prompt_security"
+	ProviderGarak          = "garak"
+)
+
 // ModelParams represents model configuration parameters
 type ModelParams struct {
 	BaseUrl string `json:"base_url" example:"https://api.openai.com/v1"` // Model API base URL
@@ -363,9 +368,9 @@ func SubmitTask(c *gin.Context, tm *TaskManager) {
 		}
 		provider := strings.ToLower(strings.TrimSpace(req.Provider))
 		if provider == "" {
-			provider = "prompt_security"
+			provider = ProviderPromptSecurity
 		}
-		if provider != "prompt_security" && provider != "garak" {
+		if provider != ProviderPromptSecurity && provider != ProviderGarak {
 			c.JSON(http.StatusOK, gin.H{
 				"status":  1,
 				"message": "invalid parameters: unsupported provider for model_redteam_report",
@@ -373,7 +378,7 @@ func SubmitTask(c *gin.Context, tm *TaskManager) {
 			})
 			return
 		}
-		if provider == "garak" {
+		if provider == ProviderGarak {
 			if len(req.Model) == 0 || strings.TrimSpace(req.Model[0].Model) == "" {
 				c.JSON(http.StatusOK, gin.H{
 					"status":  1,

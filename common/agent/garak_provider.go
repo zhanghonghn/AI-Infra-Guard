@@ -96,9 +96,10 @@ func (m *ModelRedteamReport) executeGarak(ctx context.Context, request TaskReque
 	if err != nil {
 		return err
 	}
+	safeOutputPrefix := newGarakOutputPrefix()
 	outputPath := strings.TrimSpace(param.Garak.OutputPath)
 	if outputPath == "" {
-		outputPath = filepath.Join(os.TempDir(), fmt.Sprintf("garak-%s", request.SessionId))
+		outputPath = safeOutputPrefix
 	}
 
 	args := buildGarakArgs(model, probes, outputPath, param.Garak.ExtraArgs)
@@ -143,7 +144,7 @@ func (m *ModelRedteamReport) executeGarak(ctx context.Context, request TaskReque
 	callbacks.NewPlanStepCallback(step3, taskTitles[2])
 	callbacks.StepStatusUpdateCallback(step3, status3, AgentStatusRunning, "Normalizing results", "")
 
-	records := parseGarakRecords(outputPath, lines)
+	records := parseGarakRecords(safeOutputPrefix, lines)
 	normalized, stats := normalizeGarakRecords(records)
 
 	tasks[2].Status = SubTaskStatusDone
@@ -186,7 +187,7 @@ func resolvePythonBin() (string, error) {
 	if python, err := exec.LookPath("python"); err == nil {
 		return python, nil
 	}
-	return "", fmt.Errorf("python executable not found for garak execution")
+	return "", fmt.Errorf("python executable not found for garak execution; ensure python3 or python is installed and available in PATH")
 }
 
 func setGarakModelEnv(model ModelParams) func() {
@@ -277,6 +278,12 @@ func parseGarakRecords(outputPrefix string, lines []string) []map[string]interfa
 		}
 	}
 	return records
+}
+
+func newGarakOutputPrefix() string {
+	baseDir := filepath.Join(os.TempDir(), "aig-garak")
+	_ = os.MkdirAll(baseDir, 0755)
+	return filepath.Join(baseDir, uuid.NewString())
 }
 
 func extractRecordList(wrapped map[string]interface{}) []map[string]interface{} {
@@ -432,6 +439,8 @@ func parseConfidence(m map[string]interface{}) float64 {
 	for _, key := range []string{"confidence", "score", "risk_score", "probability"} {
 		if v, ok := findValue(m, key); ok {
 			if f, ok := asFloat(v); ok {
+				// garak outputs may use either [0,1] or percentage-like [0,100] score fields.
+				// Values < 0 are clamped to 0; values > 1 are clamped to 1 after normalization.
 				if f > 1 && f <= 100 {
 					f = f / 100
 				}
@@ -451,7 +460,7 @@ func asBool(v interface{}) (bool, bool) {
 		return t, true
 	case string:
 		switch strings.ToLower(strings.TrimSpace(t)) {
-		case "true", "1", "yes", "detected", "hit", "failed":
+		case "true", "1", "yes", "detected", "hit":
 			return true, true
 		case "false", "0", "no", "not_detected", "passed":
 			return false, true

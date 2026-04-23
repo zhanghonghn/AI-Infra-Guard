@@ -37,4 +37,5 @@ func TestNormalizeGarakRecords(t *testing.T) {
 	assert.Equal(t, "detected", normalized[0]["detection_result"])
 	assert.Equal(t, "jailbreak", normalized[1]["attack_type"])
 	assert.Equal(t, "not_detected", normalized[1]["detection_result"])
+	assert.Equal(t, 0.12, normalized[1]["confidence"])
 }
