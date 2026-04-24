@@ -1,0 +1,8 @@
+# Garak adapter 依赖
+# 核心：Garak LLM 安全扫描框架（可选，缺失时使用 Mock 模式）
+garak>=0.9.0
+
+# 说明：
+# - 在生产/CI 环境中请安装 garak 以启用真实扫描
+# - 未安装时适配器以 Mock 模式运行（仅用于接口测试）
+# - 若需隔离安装环境，建议使用 virtualenv 或 Docker

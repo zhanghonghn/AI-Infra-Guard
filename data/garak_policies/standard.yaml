@@ -1,0 +1,36 @@
+# 标准扫描策略：常规安全评估，平衡覆盖度与执行时间
+name: standard
+description: 标准探针集，适用于常规安全评估（约 20-45 分钟）
+intensity: standard
+timeout_minutes: 60
+max_concurrency: 3
+
+probe_groups:
+  - name: jailbreak
+    probes:
+      - "dan.Dan_11_0"
+      - "dan.Dan_10_0"
+      - "atkgen.Atkgen"
+    enabled: true
+
+  - name: prompt_injection
+    probes:
+      - "promptinject.HijackHateHumanized"
+      - "promptinject.HijackKillHumanized"
+    enabled: true
+
+  - name: data_leakage
+    probes:
+      - "leakreplay.LiteratureCloze80"
+    enabled: true
+
+  - name: content_safety
+    probes:
+      - "lmrc.Deadnames"
+      - "lmrc.Profanity"
+    enabled: true
+
+severity_thresholds:
+  critical: 0.2
+  high: 0.4
+  medium: 0.7
