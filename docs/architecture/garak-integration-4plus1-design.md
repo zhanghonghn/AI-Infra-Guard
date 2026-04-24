@@ -5,7 +5,7 @@
 **日期**：2026-04-24  
 **作者角色**：产品技术架构师  
 **关联 PRD**：`docs/product/garak-integration-prd.md`（AIG-PRD-2026-001）  
-**状态**：草稿（Draft）  
+**状态**：草稿  
 
 ---
 
@@ -14,11 +14,11 @@
 1. [概述与目标](#1-概述与目标)
 2. [架构约束与原则](#2-架构约束与原则)
 3. [4+1 架构视图总览](#3-41-架构视图总览)
-4. [逻辑视图（Logical View）](#4-逻辑视图logical-view)
-5. [开发视图（Development View）](#5-开发视图development-view)
-6. [进程视图（Process View）](#6-进程视图process-view)
-7. [物理视图（Physical View）](#7-物理视图physical-view)
-8. [场景视图（Scenario View）](#8-场景视图scenario-view)
+4. [逻辑视图](#4-逻辑视图)
+5. [开发视图](#5-开发视图)
+6. [进程视图](#6-进程视图)
+7. [物理视图](#7-物理视图)
+8. [场景视图](#8-场景视图)
 9. [数据架构设计](#9-数据架构设计)
 10. [安全与合规设计](#10-安全与合规设计)
 11. [可观测性设计](#11-可观测性设计)
@@ -73,21 +73,21 @@ Garak 是业界成熟的 LLM 漏洞探测框架，具有丰富的探针（probe�
 
 ```mermaid
 graph TD
-    subgraph 场景视图["场景视图（Scenario View）- 用例驱动"]
+    subgraph 场景视图["场景视图- 用例驱动"]
         UC1[UC1: 发布前深度扫描]
         UC2[UC2: 越狱专项评估]
         UC3[UC3: 修复复测对比]
     end
-    subgraph 逻辑视图["逻辑视图（Logical View）- 功能分解"]
+    subgraph 逻辑视图["逻辑视图- 功能分解"]
         LOGIC[策略层 / 编排层 / 引擎层 / 标准化层 / 体验层]
     end
-    subgraph 开发视图["开发视图（Development View）- 代码组织"]
+    subgraph 开发视图["开发视图- 代码组织"]
         DEV[Go 模块 / Python 适配器 / 配置文件]
     end
-    subgraph 进程视图["进程视图（Process View）- 运行时行为"]
+    subgraph 进程视图["进程视图- 运行时行为"]
         PROC[WebServer / Agent Worker / Garak 子进程]
     end
-    subgraph 物理视图["物理视图（Physical View）- 部署拓扑"]
+    subgraph 物理视图["物理视图- 部署拓扑"]
         PHY[容器 / 网络 / 存储]
     end
     UC1 & UC2 & UC3 --> LOGIC
@@ -97,7 +97,7 @@ graph TD
 
 ---
 
-## 4. 逻辑视图（Logical View）
+## 4. 逻辑视图
 
 逻辑视图描述系统的功能分解与职责边界，使用分层架构表达关键抽象。
 
@@ -105,37 +105,37 @@ graph TD
 
 ```mermaid
 graph TB
-    subgraph UX["体验层（UX Layer）"]
+    subgraph UX["体验层"]
         UI_CREATE[创建扫描 / 任务列表]
         UI_REPORT[统一报告页]
         UI_RETEST[复测 & 对比页]
         UI_ADMIN[管理员诊断页（L3）]
     end
 
-    subgraph POLICY["策略层（Policy Layer）"]
+    subgraph POLICY["策略层"]
         POLICY_ENGINE[策略引擎<br/>ScanPolicy]
         POLICY_STORE[策略配置仓库<br/>YAML/DB]
     end
 
-    subgraph ORCH["编排层（Orchestration Layer）"]
+    subgraph ORCH["编排层"]
         TASK_MGR[任务管理器<br/>TaskManager]
         ENGINE_ROUTER[引擎路由器<br/>EngineRouter]
         SCHEDULER[调度器<br/>Scheduler]
     end
 
-    subgraph ENGINE["引擎层（Engine Layer）"]
+    subgraph ENGINE["引擎层"]
         AIG_ENGINE[AIG Native Engine<br/>Go]
         GARAK_ADAPTER[Garak Adapter<br/>Python Wrapper]
         ENGINE_IFACE[引擎抽象接口<br/>ScanEngine interface]
     end
 
-    subgraph NORM["标准化层（Normalizer Layer）"]
+    subgraph NORM["标准化层"]
         NORMALIZER[Finding Normalizer]
         MAPPING_CFG[映射规则配置]
         SEVERITY_CAL[严重度校准器]
     end
 
-    subgraph STORAGE["存储层（Storage Layer）"]
+    subgraph STORAGE["存储层"]
         DB_TASK[(ScanTask / ExecutionJob)]
         DB_FINDING[(Finding / Evidence)]
         OBJECT_STORE[(原始证据 / 报告文件)]
@@ -217,7 +217,7 @@ graph LR
 
 ---
 
-## 5. 开发视图（Development View）
+## 5. 开发视图
 
 开发视图描述代码组织结构、模块依赖与关键实现文件布局。
 
@@ -318,7 +318,7 @@ graph TD
 
 ---
 
-## 6. 进程视图（Process View）
+## 6. 进程视图
 
 进程视图描述运行时进程/线程/协程的交互关系、并发模型与关键数据流。
 
@@ -417,7 +417,7 @@ graph LR
 
 ---
 
-## 7. 物理视图（Physical View）
+## 7. 物理视图
 
 物理视图描述部署拓扑、节点职责与网络关系。
 
@@ -426,7 +426,7 @@ graph LR
 ```mermaid
 graph TB
     subgraph Host["宿主机 / VM"]
-        subgraph Docker_Network["Docker Bridge Network: aig-net"]
+        subgraph Docker_Network["Docker 桥接网络：aig-net"]
             subgraph AIG_Server["aig-server 容器（Go）"]
                 SRV_PROC[WebServer Process<br/>:8088]
                 SRV_DB[SQLite DB<br/>/app/db/tasks.db]
@@ -491,7 +491,7 @@ graph TB
 
 ---
 
-## 8. 场景视图（Scenario View）
+## 8. 场景视图
 
 场景视图通过典型用例的序列图验证架构设计的合理性。
 
@@ -843,7 +843,7 @@ func MapSeverity(passRate float64) Severity {
 garak-adapter/main.py
 接收 JSON 参数 → 运行 Garak → 输出标准化 JSON → 退出
 
-与 AIG Agent 的契约（Contract）：
+与 AIG Agent 的契约：
 - 入参：CLI 参数 --params JSON 文件路径
 - 出参：stdout 输出标准 JSON（符合 GarakAdapterOutput schema）
 - 退出码：0=成功, 1=部分失败, 2=完全失败
@@ -934,20 +934,20 @@ severity_thresholds:
 ### 13.2 测试策略
 
 ```
-单元测试（Unit Test）
+单元测试
 ├── normalizer_test.go：映射规则正确性（覆盖全部 risk_type）
 ├── policy_test.go：策略路由规则（3 种策略 × 4 种目标）
 └── adapter_test.go：命令构建逻辑（含凭证注入验证）
 
-集成测试（Integration Test）
+集成测试
 ├── Garak Mock：使用 fixtures/garak_output_samples/ 模拟 Garak 输出
 └── E2E 路径：创建任务 → Mock 执行 → 报告展示
 
-契约测试（Contract Test）
+契约测试
 ├── contract_test.go：验证 Garak 实际输出符合预期 Schema
 └── 每次 Garak 版本升级前必须通过
 
-性能测试（Performance Test）
+性能测试
 ├── Fast 模式：10 次连续执行，P50 ≤ 10 分钟
 ├── 并发测试：5 个任务同时执行，互不干扰
 └── 超时测试：验证熔断机制正确触发
