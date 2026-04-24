@@ -771,6 +771,24 @@ trace_id 格式：`AIG-{timestamp}-{random8}`，全链路透传到日志与响�
 
 ## 12. 实现指导
 
+### 12.0 实现状态总览（2026-04 实际完成）
+
+| 模块 | 文件路径 | 状态 |
+|---|---|---|
+| ScanEngine 接口 | `pkg/engine/interface.go` | ✅ 已实现 |
+| GarakAdapter | `internal/garak/adapter.go` | ✅ 已实现 |
+| Normalizer | `internal/garak/normalizer.go` | ✅ 已实现 |
+| PolicyLoader | `internal/garak/policy.go` | ✅ 已实现 |
+| GarakTask (Agent) | `common/agent/garak_task.go` | ✅ 已实现 |
+| Python 适配器 | `garak-adapter/main.py` + `runner.py` | ✅ 已实现 |
+| 策略配置 YAML | `data/garak_policies/fast|standard|deep.yaml` | ✅ 已实现 |
+| 前端服务定义 | `mcpServices.garakScan` i18n | ✅ 已实现 |
+| 前端报告组件 (Xle) | `main-CxUmbQGI.js` bundle patch | ✅ 已实现 |
+| Finding DB 持久化 | `pkg/database/` 新增表 | ⏳ 首期未实现 |
+| 前端 RBAC 字段过滤 | Xle 角色判断逻辑 | ⏳ 首期未实现 |
+| 报告导出 PDF/JSON | 前端导出按钮 | ⏳ 首期未实现 |
+| 复测与对比 | FR-6 全部功能 | ⏳ 后续 Sprint |
+
 ### 12.1 Garak Adapter（Go 侧：`internal/garak/adapter.go`）
 
 ```go
@@ -917,6 +935,73 @@ severity_thresholds:
   high: 0.4
   medium: 0.7
 ```
+
+### 12.5 前端报告组件（`GarakScanView / Xle`）
+
+前端采用 **JS bundle 外科手术补丁** 方式（直接修改编译后的 `common/websocket/static/assets/main-CxUmbQGI.js`），在现有组件体系中注入 `Xle` 组件，不改变构建工具链。
+
+#### 组件名称与注册位置
+
+| 变量名 | 组件作用 | 注入位置 |
+|---|---|---|
+| `Xle` | GarakScanView 报告组件 | bundle 中 `wle`（AgentScan 组件）定义之前 |
+| Case switch 1 | 报告页（`/report/:id`）任务类型路由 | `case"Garak-Scan"` 分支 |
+| Case switch 2 | 聊天视图任务结果路由 | `case"Garak-Scan"` 分支 |
+
+#### `Xle` 组件 Props 契约
+
+```typescript
+interface XleProps {
+  step?: StepData;          // 当前执行步骤（null 时直接展示结果）
+  garakScanResult?: GarakResult; // 显式传入的结果（可选）
+  sessionId?: string;        // 任务 ID（用于从 state 中自查消息）
+  isFullscreen?: boolean;
+  onToggleFullscreen?: () => void;
+}
+
+interface GarakResult {
+  scan_id: string;
+  total: number;
+  by_severity: { critical: number; high: number; medium: number; low: number };
+  findings: Finding[];
+  garak_version?: string;
+  adapter_version?: string;
+  metadata?: { model_provider: string; model_name: string; start_time: string; end_time: string };
+}
+```
+
+#### `Xle` 组件渲染结构
+
+```
+GarakScanView
+├─ 头部栏
+│   ├─ "Garak LLM 安全扫描报告" 标题
+│   └─ 发现数徽章
+├─ 严重度统计卡（4格：严重/高危/中危/低危）
+│   └─ 数据来源：garakScanResult.by_severity
+└─ Finding 列表（无发现时显示"✓ 未发现安全风险"）
+    └─ 每条 Finding（点击展开/折叠）
+        ├─ risk_type_display + severity 徽章（颜色分级）+ confidence %
+        ├─ evidence_summary（证据摘要，L1 可见）
+        └─ 展开详情
+            ├─ asset（受影响目标）
+            ├─ 证据链（evidence_detail.fail_examples，最多 2 条）
+            │   ├─ Q: <prompt 前 120 字>
+            │   └─ A: <response 前 150 字>
+            └─ 修复建议（fix_recommendation，绿色背景卡）
+```
+
+#### 关键补丁点（7 处）
+
+| 补丁 # | 目标字符串 | 变更说明 |
+|---|---|---|
+| ① | `result:{total:(A.summary&&A.summary.total_findings)...` | 修复 result.total 取值（→ `A.total||0`）|
+| ② | 注入点：`wle=({step:e,agentScanResult:t,...` 前 | 注入 `Xle` 组件定义 |
+| ③ | `r.type==="Agent-Scan"&&(E(A),o(null))` | Case1 type setter 添加 Garak-Scan 分支 |
+| ④ | `Y.type==="Agent-Scan"){const B=...` | Case2 添加 Garak-Scan 消息检查 |
+| ⑤ | `U.agentScanResult&&(v(...),r(null)))` | Case2 fallback chain 扩展 |
+| ⑥ | `case"Garak-Scan":return u.jsx(die,...` (Case1) | switch 使用 `Xle` |
+| ⑦ | `case"Garak-Scan":return u.jsx(die,...` (Case2) | switch 使用 `Xle` |
 
 ---
 
