@@ -1285,6 +1285,19 @@ func (tm *TaskManager) generateTaskTitle(req *TaskCreateRequest) string {
 		if req.Content != "" {
 			ret += " " + req.Content
 		}
+	case agent.TaskTypeGarakScan:
+		intensity, ok := req.Params["intensity"]
+		if language == "en" {
+			ret = "Garak LLM Security Scan - "
+		} else {
+			ret = "Garak LLM安全扫描 - "
+		}
+		if ok {
+			ret += intensity.(string)
+		}
+		if req.Content != "" {
+			ret += " " + req.Content
+		}
 	default:
 		ret = texts.otherTask + req.Content
 	}

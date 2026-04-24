@@ -18,6 +18,7 @@ After the project is running, you can access `http://localhost:8088/docs/index.h
 2. MCP Server Scan API
 3. Jailbreak Evaluation API
 4. AI Infra Scan API
+5. Garak LLM Security Scan API
 
 ### Model Management API
 1. Get Model List
@@ -109,7 +110,7 @@ curl -X POST \
 #### Request Parameters
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| type | string | Yes | Task type: mcp_scan, ai_infra_scan, model_redteam_report, agent_scan |
+| type | string | Yes | Task type: mcp_scan, ai_infra_scan, model_redteam_report, agent_scan, garak_scan |
 | content | object | Yes | Task content, varies according to task type |
 
 #### Response Fields
@@ -587,6 +588,82 @@ curl -X POST http://localhost:8088/api/v1/app/taskapi/tasks \
     }
   }'
 ```
+
+---
+
+### 5. Garak LLM Security Scan API
+
+Perform deep red-team evaluation of LLM APIs using [Garak](https://github.com/NVIDIA/garak) probes. Covers jailbreak, prompt injection, data leakage and content-violation risk categories with configurable scan intensity.
+
+#### Request Parameters
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| provider | string | Yes | LLM provider, e.g. `openai`, `huggingface` |
+| model | string | Yes | Model name, e.g. `gpt-4o`, `meta-llama/Meta-Llama-3-8B-Instruct` |
+| api_key | string | No | LLM API key (injected via env var, never logged) |
+| base_url | string | No | Custom API base URL (for private or proxy endpoints) |
+| intensity | string | No | Scan intensity: `fast` (default, ~15 min), `standard` (~45 min), `deep` (~90 min) |
+
+#### Python Example
+```python
+import requests
+
+def garak_scan():
+    task_url = "http://localhost:8088/api/v1/app/taskapi/tasks"
+    task_data = {
+        "type": "garak_scan",
+        "content": {
+            "provider": "openai",
+            "model": "gpt-4o",
+            "api_key": "sk-your-api-key",
+            "base_url": "https://api.openai.com/v1",
+            "intensity": "fast"
+        }
+    }
+    response = requests.post(task_url, json=task_data)
+    return response.json()
+
+result = garak_scan()
+print(f"Task created, session_id: {result['data']['session_id']}")
+```
+
+#### cURL Example
+```bash
+curl -X POST http://localhost:8088/api/v1/app/taskapi/tasks \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "garak_scan",
+    "content": {
+      "provider": "openai",
+      "model": "gpt-4o",
+      "api_key": "sk-your-api-key",
+      "base_url": "https://api.openai.com/v1",
+      "intensity": "standard"
+    }
+  }'
+```
+
+#### Result Schema
+
+After the task completes, the result payload contains:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| scan_id | string | Unique scan identifier |
+| findings | array | List of discovered security issues |
+| findings[].id | string | Unique finding ID |
+| findings[].probe_id | string | Garak probe that triggered this finding |
+| findings[].risk_type | string | Risk type: jailbreak / prompt_injection / data_leakage / content_violation / unknown |
+| findings[].severity | string | Severity level: critical / high / medium / low |
+| findings[].confidence | number | Confidence score (0–100) |
+| findings[].evidence_summary | string | Evidence summary |
+| findings[].fix_recommendation | string | Remediation advice |
+| summary.total_findings | number | Total findings count |
+| summary.pass_rate | number | Probe pass rate (0.0–1.0) |
+| summary.severity_counts | object | Counts per severity level |
+| metadata.scan_duration_seconds | number | Scan duration in seconds |
+| metadata.intensity | string | Scan intensity used |
+| metadata.total_probes | number | Total probes executed |
 
 ---
 

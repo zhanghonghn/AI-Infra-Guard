@@ -18,6 +18,7 @@ A.I.G(AI-Infra-Guard) 提供了一套完整的API接口，用于AI基础设施�
 2. AI 基础设施扫描 API
 3. 大模型安全体检 API
 4. Agent 安全扫描 API
+5. Garak LLM 安全扫描 API
 
 ### 模型管理 API
 1. 获取模型列表
@@ -109,7 +110,7 @@ curl -X POST \
 #### 请求参数
 | 参数名 | 类型 | 必填 | 说明 |
 |--------|------|------|------|
-| type | string | 是 | 任务类型：mcp_scan、ai_infra_scan、model_redteam_report、agent_scan |
+| type | string | 是 | 任务类型：mcp_scan、ai_infra_scan、model_redteam_report、agent_scan、garak_scan |
 | content | object | 是 | 任务内容，根据任务类型不同而不同 |
 
 #### 响应字段
@@ -583,6 +584,83 @@ curl -X POST http://localhost:8088/api/v1/app/taskapi/tasks \
     }
   }'
 ```
+
+---
+
+### 5. Garak LLM 安全扫描 API
+
+使用 [Garak](https://github.com/NVIDIA/garak) 框架对大模型 API 进行深度红队评测，覆盖越狱（jailbreak）、提示注入（prompt injection）、数据泄露（data leakage）和内容违规（content violation）四大风险维度，支持三档扫描强度（fast / standard / deep）。
+
+#### 请求参数说明
+| 参数名 | 类型 | 必填 | 说明 |
+|--------|------|------|------|
+| provider | string | 是 | LLM 提供商，如 `openai`、`huggingface` |
+| model | string | 是 | 模型名称，如 `gpt-4o`、`meta-llama/Meta-Llama-3-8B-Instruct` |
+| api_key | string | 否 | LLM API 密钥（通过环境变量注入，不出现在日志） |
+| base_url | string | 否 | 自定义 API 基础 URL（使用私有或代理端点时提供） |
+| intensity | string | 否 | 扫描强度：`fast`（默认，约15分钟）、`standard`（约45分钟）、`deep`（约90分钟） |
+
+#### Python 示例
+```python
+import requests
+
+def garak_scan():
+    task_url = "http://localhost:8088/api/v1/app/taskapi/tasks"
+    task_data = {
+        "type": "garak_scan",
+        "content": {
+            "provider": "openai",
+            "model": "gpt-4o",
+            "api_key": "sk-your-api-key",
+            "base_url": "https://api.openai.com/v1",
+            "intensity": "fast"
+        }
+    }
+
+    response = requests.post(task_url, json=task_data)
+    return response.json()
+
+result = garak_scan()
+print(f"任务创建成功，会话ID: {result['data']['session_id']}")
+```
+
+#### cURL 示例
+```bash
+curl -X POST http://localhost:8088/api/v1/app/taskapi/tasks \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "garak_scan",
+    "content": {
+      "provider": "openai",
+      "model": "gpt-4o",
+      "api_key": "sk-your-api-key",
+      "base_url": "https://api.openai.com/v1",
+      "intensity": "standard"
+    }
+  }'
+```
+
+#### 响应结果说明
+
+任务完成后，通过 SSE 或任务详情接口获取的结果包含以下字段：
+
+| 字段名 | 类型 | 说明 |
+|--------|------|------|
+| scan_id | string | 扫描唯一标识 |
+| findings | array | 发现的安全问题列表 |
+| findings[].id | string | 问题唯一 ID |
+| findings[].probe_id | string | 触发的 Garak 探针 ID |
+| findings[].risk_type | string | 风险类型：jailbreak / prompt_injection / data_leakage / content_violation / unknown |
+| findings[].severity | string | 严重级别：critical / high / medium / low |
+| findings[].confidence | number | 置信度（0–100） |
+| findings[].evidence_summary | string | 触发证据摘要 |
+| findings[].fix_recommendation | string | 修复建议 |
+| summary.total_findings | number | 发现问题总数 |
+| summary.pass_rate | number | 探针通过率（0.0–1.0） |
+| summary.severity_counts | object | 按严重级别统计：critical / high / medium / low |
+| metadata.scan_duration_seconds | number | 扫描耗时（秒） |
+| metadata.intensity | string | 本次使用的扫描强度 |
+| metadata.total_probes | number | 执行的探针总数 |
 
 ---
 
