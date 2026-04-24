@@ -60,6 +60,9 @@ COPY ./agent-scan /app/agent-scan/
 WORKDIR /app/agent-scan
 RUN pip install --no-cache-dir -r requirements.txt
 
+COPY ./garak-adapter /app/garak-adapter/
+WORKDIR /app/garak-adapter
+RUN pip install --no-cache-dir -r requirements.txt
 
 RUN set -eux; \
     apt-get purge -y --auto-remove \
