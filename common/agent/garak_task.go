@@ -22,6 +22,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -114,6 +115,9 @@ func (g *GarakTask) Execute(ctx context.Context, request TaskRequest, callbacks 
 	}
 
 	tasks[0].Status = SubTaskStatusDone
+	// 步骤 1 成功完成时必须显式回调 AgentStatusCompleted，否则前端会一直
+	// 显示"准备中"，即使后续步骤已经全部完成也无法收敛。
+	callbacks.StepStatusUpdateCallback(step1, statusID1, AgentStatusCompleted, garakInitDoneTitle(language), "")
 	tasks[1].Status = SubTaskStatusDoing
 	tasks[1].StartedAt = time.Now().Unix()
 	callbacks.PlanUpdateCallback(tasks)
@@ -153,14 +157,38 @@ func (g *GarakTask) Execute(ctx context.Context, request TaskRequest, callbacks 
 		}
 	})
 
+	// 区分 adapter 协议中的退出码：
+	//   0   = 成功
+	//   1   = 部分失败（仍然有合法 JSON 输出，可继续标准化）
+	//   其他 = 完全失败（即使有 JSON 输出，也只是错误信息，不应作为结果展示）
+	exitCode := exitCodeFromError(err)
+	scanFailed := err != nil && exitCode != 1
+	// 若 adapter 输出了带有 metadata.error 的错误 JSON，提前解析以便给出
+	// 更可读的失败原因（避免只显示 "进程异常退出: exit status 2"）。
+	parsedOutput, parseErr := parseAdapterOutput(outputLines)
+
+	if scanFailed {
+		// 工具状态：标记为 done 但 brief 描述失败原因（项目当前未定义 failed 状态）
+		callbacks.ToolUsedCallback(step2, toolID2, "garak-adapter 失败", []Tool{
+			{ToolId: toolID2, Tool: "garak-adapter", Status: ToolStatusDone, Brief: "扫描失败"},
+		})
+		failureDetail := buildAdapterFailureDetail(err, parsedOutput, parseErr)
+		callbacks.StepStatusUpdateCallback(step2, statusID2, AgentStatusFailed, "扫描失败", failureDetail)
+		tasks[1].Status = SubTaskStatusDone
+		callbacks.PlanUpdateCallback(tasks)
+		return fmt.Errorf("Garak 扫描失败: %s", failureDetail)
+	}
+
 	callbacks.ToolUsedCallback(step2, toolID2, "garak-adapter 完成", []Tool{
 		{ToolId: toolID2, Tool: "garak-adapter", Status: ToolStatusDone, Brief: "扫描完成"},
 	})
-
+	// 步骤 2 显式标记为 completed，避免前端一直停留在"扫描中"
+	step2DoneBrief := ""
 	if err != nil {
-		callbacks.StepStatusUpdateCallback(step2, statusID2, AgentStatusFailed, "扫描失败", err.Error())
-		// 不立即 return，尝试解析已有输出
+		// exit code 1：部分探针失败但整体完成
+		step2DoneBrief = "部分探针失败，已生成可用结果"
 	}
+	callbacks.StepStatusUpdateCallback(step2, statusID2, AgentStatusCompleted, "扫描完成", step2DoneBrief)
 
 	tasks[1].Status = SubTaskStatusDone
 	tasks[2].Status = SubTaskStatusDoing
@@ -173,14 +201,11 @@ func (g *GarakTask) Execute(ctx context.Context, request TaskRequest, callbacks 
 	statusID3 := uuid.NewString()
 	callbacks.StepStatusUpdateCallback(step3, statusID3, AgentStatusRunning, "生成报告", "正在标准化扫描结果...")
 
-	adapterOutput, parseErr := parseAdapterOutput(outputLines)
 	if parseErr != nil {
-		if err != nil {
-			// 两个错误都有，扫描彻底失败
-			return fmt.Errorf("Garak 扫描失败: %w; 输出解析失败: %v", err, parseErr)
-		}
+		callbacks.StepStatusUpdateCallback(step3, statusID3, AgentStatusFailed, "标准化失败", parseErr.Error())
 		return fmt.Errorf("解析 Garak 输出失败: %w", parseErr)
 	}
+	adapterOutput := parsedOutput
 
 	// 使用 Normalizer 转换为统一 Finding Schema
 	thresholds := defaultThresholds(policyDir, params.Intensity)
@@ -217,6 +242,42 @@ func garakTaskTitles(language string) []string {
 	}
 }
 
+// garakInitDoneTitle 步骤 1 完成时显示的简短标题
+func garakInitDoneTitle(language string) string {
+	if strings.ToLower(language) == "zh" || strings.ToLower(language) == "zh_cn" {
+		return "初始化完成"
+	}
+	return "Initialization completed"
+}
+
+// exitCodeFromError 从 exec 子进程错误中提取退出码；非 *exec.ExitError 返回 -1
+func exitCodeFromError(err error) int {
+	if err == nil {
+		return 0
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return exitErr.ExitCode()
+	}
+	return -1
+}
+
+// buildAdapterFailureDetail 在子进程失败时构造对用户友好的失败原因。
+// 优先使用 adapter 输出 JSON 中的 metadata.error（包含 "Garak 未安装" 等真实原因），
+// 退化到原始 err.Error()（例如 "进程异常退出: exit status 2"）。
+func buildAdapterFailureDetail(runErr error, parsed *garakpkg.AdapterOutput, parseErr error) string {
+	if parsed != nil && strings.TrimSpace(parsed.Metadata.Error) != "" {
+		return parsed.Metadata.Error
+	}
+	if runErr != nil {
+		if parseErr != nil {
+			return fmt.Sprintf("%s（adapter 输出无法解析: %v）", runErr.Error(), parseErr)
+		}
+		return runErr.Error()
+	}
+	return "未知错误"
+}
+
 // defaultFastProbes 当策略文件缺失时的兜底探针集
 var defaultFastProbes = []string{
 	"dan.Dan_11_0",
@@ -243,8 +304,9 @@ func resolveProbeGroups(intensity, policyDir string) ([]string, error) {
 	return probes, nil
 }
 
-func buildAdapterArgv(adapterDir, scanID string, params GarakScanParams, probes []string) []string {	adapterScript := adapterDir + "/main.py"
-	return []string{
+func buildAdapterArgv(adapterDir, scanID string, params GarakScanParams, probes []string) []string {
+	adapterScript := adapterDir + "/main.py"
+	argv := []string{
 		adapterScript,
 		"--scan-id", scanID,
 		"--model-provider", params.ModelProvider,
@@ -252,6 +314,13 @@ func buildAdapterArgv(adapterDir, scanID string, params GarakScanParams, probes 
 		"--probe-groups", strings.Join(probes, ","),
 		"--output-format", "json",
 	}
+	// 仅在用户显式提供 BaseURL 时才透传，避免覆盖 garak 默认行为；
+	// 对 ollama / 自定义反向代理等场景这是必要的，否则 garak 子进程会因
+	// 找不到模型端点而启动失败（最终表现为 adapter "exit status 2"）。
+	if strings.TrimSpace(params.BaseURL) != "" {
+		argv = append(argv, "--base-url", params.BaseURL)
+	}
+	return argv
 }
 
 func runAdapterProcess(ctx context.Context, workDir, pythonBin string, argv, envVars []string, lineCallback func(string)) error {

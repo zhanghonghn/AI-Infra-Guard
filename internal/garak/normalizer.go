@@ -61,6 +61,10 @@ type OutputMeta struct {
 	EndTime       string `json:"end_time"`
 	ModelProvider string `json:"model_provider"`
 	ModelName     string `json:"model_name"`
+	// Error 仅在 adapter 失败时由 garak-adapter/main.py 写入；用于将真实
+	// 失败原因（例如 "Garak 未安装"）回传给上游 Agent，避免用户只看到
+	// "exit status 2" 这种无信息的退出码。
+	Error string `json:"error,omitempty"`
 }
 
 // ------------------- 风险类型映射（probe ID → RiskType）-------------------
