@@ -443,9 +443,9 @@ graph TB
         end
 
         subgraph Volumes["持久化存储"]
-            VOL_DB[/app/db<br/>SQLite]
-            VOL_UPLOADS[/app/uploads<br/>报告/证据文件]
-            VOL_POLICIES[/app/data/garak_policies<br/>策略配置 YAML]
+            VOL_DB[("/app/db<br/>SQLite 数据卷")]
+            VOL_UPLOADS[("/app/uploads<br/>报告/证据文件")]
+            VOL_POLICIES[("/app/data/garak_policies<br/>策略配置 YAML")]
         end
     end
 
@@ -680,12 +680,12 @@ CREATE TABLE retest_baselines (
 ```mermaid
 graph LR
     USER[用户填写 API Key] -->|只传 key_name| FE
-    FE -->|POST {api_key_name: "my_key"}| SRV
-    SRV --> CRED_STORE[(凭证存储表\n加密存储实际 Key)]
+    FE -->|"POST &#123;api_key_name: 'my_key'&#125;"| SRV
+    SRV -->|加密写入| CRED_STORE[("凭证存储表<br/>加密存储实际 Key")]
     SRV -->|只传 key_ref_id| AGENT
-    AGENT --> CRED_STORE
+    CRED_STORE -.->|按 ref_id 解密返回实际 Key| AGENT
     AGENT -->|实际 Key（内存，不落磁盘）| GARAK_PROC[Garak 进程]
-    GARAK_PROC -->|Authorization: Bearer <key>| LLM_API
+    GARAK_PROC -->|"Authorization: Bearer &lt;key&gt;"| LLM_API
 ```
 
 **规则**：
