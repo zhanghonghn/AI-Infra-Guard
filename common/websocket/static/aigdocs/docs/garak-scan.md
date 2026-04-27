@@ -110,6 +110,25 @@ curl -X POST http://localhost:8088/api/v1/app/taskapi/tasks \
 | **summary.severity_counts** | 按 critical / high / medium / low 统计的问题数量 |
 | **metadata.scan_duration_seconds** | 本次扫描耗时（秒） |
 | **metadata.total_probes** | 执行的探针总数 |
+| **report_markdown** | 详细报告的 Markdown 全文（前端可直接渲染，无需额外下载） |
+| **report_filename** | 详细报告的建议文件名，例如 `garak-report-<scan_id>.md` |
+| **report_url** | 详细报告在服务端的访问地址（已上传时返回，前缀为 `/api/v1/images/`） |
+| **report_local_path** | 详细报告在 Agent 节点上的本地临时路径（仅供排查用） |
+| **attachment** | 与 `report_url` 对应的服务端 fileUrl，遵循其他任务的附件字段约定 |
+
+### 详细 Markdown 报告内容
+
+`report_markdown` 字段固定包含以下章节，按 `language` 自动切换中英文：
+
+1. **顶部元信息表**：扫描 ID / 模型 Provider / 模型名称 / 扫描强度 / 起止时间 / Garak & Adapter 版本
+2. **执行摘要**：风险问题总数、执行探针总数、失败尝试 / 总尝试、整体通过率，以及按严重度分布的统计表
+3. **风险问题详情**：按严重度从高到低排序，每条 Finding 含证据摘要、置信度、关联探针 / 检测器、最多 3 条失败样本（prompt / response 各截断到 ≤ 800 字符）、修复建议
+4. **探针执行结果表**：按通过率升序展示所有探针，便于快速定位高风险探针
+5. **附录**：报告生成说明与脱敏提示（API Key 等敏感凭证不会出现在报告中）
+
+> 报告同时以 inline 字段（`report_markdown`）和上传文件（`report_url` / `attachment`）两种形式返回。
+> Server 不可达或上传失败时只返回 inline 字段，不会阻塞主结果，并在 Agent 日志中给出警告。
+
 
 ## 前提条件
 

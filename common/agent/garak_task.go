@@ -218,11 +218,87 @@ func (g *GarakTask) Execute(ctx context.Context, request TaskRequest, callbacks 
 
 	// 构建返回结果（与 PromptTask 风格保持一致）
 	result := buildGarakResult(scanID, adapterOutput, findings)
+
+	// ---------- 生成 Markdown 详细报告 ----------
+	// 单独走 try-best 路径：报告生成/落盘/上传任一步骤失败都不能阻塞主结果
+	// 返回，否则用户会同时丢失「JSON 结果」与「Markdown 报告」两个产物。
+	reportMD := garakpkg.RenderMarkdownReport(garakpkg.ReportInputs{
+		ScanID:    scanID,
+		Intensity: params.Intensity,
+		Output:    adapterOutput,
+		Findings:  findings,
+		Language:  language,
+	})
+	result["report_markdown"] = reportMD
+	if reportPath, uploadInfo, reportErr := persistGarakReport(g.Server, scanID, reportMD); reportErr != nil {
+		gologger.Warnf("Garak 详细报告生成/上传失败（不影响主结果）: %v", reportErr)
+	} else {
+		result["report_filename"] = "garak-report-" + scanID + ".md"
+		if reportPath != "" {
+			result["report_local_path"] = reportPath
+		}
+		if uploadInfo != nil && uploadInfo.Data.FileUrl != "" {
+			// 与其他任务保持一致，使用 /api/v1/images/ 前缀供前端直接拉取
+			result["report_url"] = "/api/v1/images/" + uploadInfo.Data.FileUrl
+			result["attachment"] = uploadInfo.Data.FileUrl
+		}
+	}
+
 	callbacks.StepStatusUpdateCallback(step3, statusID3, AgentStatusCompleted, "报告生成完成", "")
 	tasks[2].Status = SubTaskStatusDone
 	callbacks.PlanUpdateCallback(tasks)
 	callbacks.ResultCallback(result)
 	return nil
+}
+
+// persistGarakReport 把 Markdown 详细报告落到临时文件并尝试上传到 AIG Server。
+// 返回 (本地路径, 上传响应, 错误)。本地路径在上传失败时仍然有值，便于排查。
+func persistGarakReport(server, scanID, content string) (string, *utils.UploadFileResponse, error) {
+	if strings.TrimSpace(content) == "" {
+		return "", nil, fmt.Errorf("空报告内容")
+	}
+	tmpFile, err := os.CreateTemp("", fmt.Sprintf("garak-report-%s-*.md", sanitizeForFilename(scanID)))
+	if err != nil {
+		return "", nil, fmt.Errorf("创建报告临时文件: %w", err)
+	}
+	if _, err := tmpFile.WriteString(content); err != nil {
+		_ = tmpFile.Close()
+		return tmpFile.Name(), nil, fmt.Errorf("写入报告内容: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		return tmpFile.Name(), nil, fmt.Errorf("关闭临时文件: %w", err)
+	}
+	if strings.TrimSpace(server) == "" {
+		// 没有 Server 地址（例如纯本地 / 单测场景）时，只保留本地报告路径。
+		return tmpFile.Name(), nil, nil
+	}
+	info, err := utils.UploadFile(server, tmpFile.Name())
+	if err != nil {
+		return tmpFile.Name(), nil, fmt.Errorf("上传报告文件: %w", err)
+	}
+	return tmpFile.Name(), info, nil
+}
+
+// sanitizeForFilename 把 scanID 中可能存在的路径分隔符 / 通配符等清理成下划线，
+// 防止 CreateTemp 的 pattern 出现意外的目录跳转。
+func sanitizeForFilename(s string) string {
+	if s == "" {
+		return "scan"
+	}
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case (r >= 'a' && r <= 'z'), (r >= 'A' && r <= 'Z'), (r >= '0' && r <= '9'),
+			r == '-', r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('_')
+		}
+	}
+	if b.Len() == 0 {
+		return "scan"
+	}
+	return b.String()
 }
 
 // ------------------- 辅助函数 -------------------
