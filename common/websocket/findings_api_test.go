@@ -176,6 +176,48 @@ func TestHandleExportFindings(t *testing.T) {
 	assert.Contains(t, doc, "findings")
 }
 
+func TestSanitizeFilenamePart(t *testing.T) {
+	assert.Equal(t, "scan", sanitizeFilenamePart(""))
+	assert.Equal(t, "scan-A", sanitizeFilenamePart("scan-A"))
+	assert.Equal(t, "abc_123", sanitizeFilenamePart("abc_123"))
+	// 路径穿越字符全部替换
+	assert.Equal(t, "______etc_passwd", sanitizeFilenamePart("../../etc/passwd"))
+	// 头注入字符全部替换
+	assert.Equal(t, "a_b__c", sanitizeFilenamePart("a\"b\r\nc"))
+	// 多字节按 byte 替换（中文 3 字节）
+	got := sanitizeFilenamePart("中文-scan")
+	assert.Equal(t, "______-scan", got)
+
+	// 长度限制
+	long := ""
+	for i := 0; i < 200; i++ {
+		long += "a"
+	}
+	assert.LessOrEqual(t, len(sanitizeFilenamePart(long)), 64)
+}
+
+func TestHandleExportFindings_HeaderInjectionSafe(t *testing.T) {
+	tm, fs, cleanup := newTaskManagerWithFindings(t)
+	defer cleanup()
+	// 写入一个 scanID 含 CRLF 的 finding（极端构造，正常路径不会出现）
+	require.NoError(t, fs.SaveFindings([]database.Finding{{
+		FindingID: "f-evil", ScanID: "evil\r\nX-Injected: yes",
+		RiskType: "Jailbreak", Severity: "high",
+	}}))
+
+	r := newFindingsRouter(tm)
+	// gin 路径参数不允许换行，所以这里用 URL 编码
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/app/findings/evil%0d%0aX-Injected:%20yes/export", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	cd := w.Header().Get("Content-Disposition")
+	assert.NotContains(t, cd, "\r")
+	assert.NotContains(t, cd, "\n")
+	assert.Empty(t, w.Header().Get("X-Injected"), "must not honor injected header")
+}
+
 func TestHandleUpdateFindingStatus(t *testing.T) {
 	tm, fs, cleanup := newTaskManagerWithFindings(t)
 	defer cleanup()

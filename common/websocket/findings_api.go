@@ -119,9 +119,36 @@ func HandleExportFindings(c *gin.Context, tm *TaskManager) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	filename := fmt.Sprintf("findings-%s-%s.json", scanID, time.Now().Format("20060102-150405"))
+	filename := fmt.Sprintf("findings-%s-%s.json", sanitizeFilenamePart(scanID), time.Now().Format("20060102-150405"))
 	c.Header("Content-Disposition", "attachment; filename=\""+filename+"\"")
 	c.Data(http.StatusOK, "application/json; charset=utf-8", body)
+}
+
+// sanitizeFilenamePart 将一个用户提供的字符串转换为安全的文件名片段：
+// 仅保留 [A-Za-z0-9_-]，其他字符替换成 '_'。用于防止 Content-Disposition 头注入
+// 与导出文件名中的目录穿越。
+func sanitizeFilenamePart(s string) string {
+	if s == "" {
+		return "scan"
+	}
+	const max = 64
+	out := make([]byte, 0, len(s))
+	for i := 0; i < len(s) && len(out) < max; i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z',
+			c >= 'A' && c <= 'Z',
+			c >= '0' && c <= '9',
+			c == '-' || c == '_':
+			out = append(out, c)
+		default:
+			out = append(out, '_')
+		}
+	}
+	if len(out) == 0 {
+		return "scan"
+	}
+	return string(out)
 }
 
 // UpdateFindingStatusRequest 更新 Finding 处理状态请求体
