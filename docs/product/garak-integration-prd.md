@@ -408,7 +408,7 @@ Garak 是业界成熟的 LLM 漏洞测试框架，具备丰富的探针（probe�
 **验收标准**：
 - [x] L1 用户可在 5 分钟内理解风险结论与修复优先级（`Xle` 组件：严重度统计卡 + Finding 列表 + 一键展开修复建议）
 - [x] 报告不出现任何 Garak 原生术语（`risk_type_display` 中文名映射、`evidence_summary` 自然语言描述）
-- [ ] 导出 PDF/JSON 内容与页面显示内容一致（首期未实现，后续 Sprint 跟进）
+- [x] 导出 PDF/JSON 内容与页面显示内容一致（**迭代 2 已完成 JSON 导出**：`GET /api/v1/app/findings/{scanId}/export`，含全部统计与 finding 字段；PDF 留待后续 Sprint）
 - [x] 证据链字段按角色权限正确展示/隐藏（`evidence_detail.fail_examples` 在 `Xle` 展开详情中展示 payload→response 对；`source_engine`/`garak_probe_id` 前端暂未渲染给普通用户）
 
 ---
@@ -434,9 +434,9 @@ Garak 是业界成熟的 LLM 漏洞测试框架，具备丰富的探针（probe�
 | 安全评分变化 | 分值 + 百分比变化 |
 
 **验收标准**：
-- [ ] 可选择历史基线任务进行对比（最近 10 次）（首期未实现）
-- [ ] 输出"已改善/未改善/新增风险"三分类（首期未实现）
-- [ ] 对比报告可独立导出（首期未实现）
+- [x] 可选择历史基线任务进行对比（最近 10 次）（**迭代 2 已完成**：`GET /api/v1/app/scans/{scanId}/retest_history?limit=10`）
+- [x] 输出"已改善/未改善/新增风险"三分类（**迭代 2 已完成**：`GET /api/v1/app/scans/compare?baseline=&new=` 返回 `fixed`/`unfixed`/`new_risks`，详见 `pkg/database/finding.go::CompareFindings`）
+- [x] 对比报告可独立导出（**迭代 2 已完成**：对比 API 输出 JSON 即为可独立导出格式；UI 集成留待后续）
 
 ---
 
@@ -647,7 +647,7 @@ Week 8    [M5] 正式发布
 - [x] Garak Adapter 实现（子进程执行：`internal/garak/adapter.go` + `garak-adapter/main.py`）
 - [x] Orchestrator 策略路由逻辑（`internal/garak/policy.go` + `data/garak_policies/*.yaml`）
 - [x] Normalizer 初版（覆盖主要风险类型：`internal/garak/normalizer.go`，覆盖 Jailbreak/PromptInjection/DataLeakage/ContentViolation）
-- [ ] Finding 存储与查询 API（首期 in-memory 返回；DB 持久化后续 Sprint 实现）
+- [x] Finding 存储与查询 API（**迭代 2 已完成**：`pkg/database/finding.go` 提供 GORM 表 + `FindingStore`；任务结果由 `task_manager.persistGarakFindings` 自动落库；查询 API 见 `common/websocket/findings_api.go`）
 - [x] 单元测试覆盖率 ≥ 80%（新增代码：adapter_test / normalizer_test / policy_test / Python test_runner.py 共 32 个测试）
 
 ### M3（Week 5-6）：前端与报告
@@ -656,8 +656,8 @@ Week 8    [M5] 正式发布
 - [x] 创建任务页面改造（无感体验：`mcpServices.garakScan` i18n 服务定义，`Garak-Scan` 加入任务列表）
 - [x] 统一报告页（风险总览 + 分类 + 详情：前端 `Xle/GarakScanView` 组件，含严重度统计卡、Finding 列表、修复建议）
 - [x] 证据链展开组件（`evidence_detail.fail_examples` 展示 Q→A 对，最多 2 个样本）
-- [ ] 复测发起与对比页面（首期未实现）
-- [ ] 导出报告功能（JSON/PDF）（首期未实现）
+- [x] 复测发起与对比页面（**迭代 2 已完成后端 API**：`POST /scans/{id}/retest` + `GET /scans/compare`；前端页面留待后续 Sprint）
+- [x] 导出报告功能（JSON/PDF）（**迭代 2 已完成 JSON 导出**：`GET /findings/{id}/export` 含 schema_version=`garak_findings_export_v1`；PDF 留待后续 Sprint）
 
 ### M4（Week 7）：联调与内部灰度
 
@@ -745,16 +745,16 @@ Week 8    [M5] 正式发布
 - [x] 用户全流程操作不出现 Garak 品牌或原生术语（L1/L2 视图）（`Xle` 报告组件全部使用业务语言）
 - [x] 三种扫描策略（Fast/Standard/Deep）均可成功执行且有差异化覆盖（`data/garak_policies/*.yaml` 已实现）
 - [x] 报告展示统一 Schema，风险类型与原始 Garak 字段解耦（`risk_type_display`、`evidence_summary` 完全解耦）
-- [ ] 复测功能可用，对比结果可解释（首期未实现）
+- [x] 复测功能可用，对比结果可解释（**迭代 2 已完成后端**：fixed/unfixed/new_risks 三分类 + 严重度统计；UI 留待后续）
 - [ ] 权限分层正确（L1/L2/L3 各自只看到允许的字段）（前端 RBAC 过滤首期未实现；后端 Finding 字段结构已定义）
-- [ ] 报告导出（PDF/JSON）内容与页面一致且字段完整（首期未实现）
+- [x] 报告导出（PDF/JSON）内容与页面一致且字段完整（**迭代 2 已完成 JSON**：包含统计 + 全量 Finding；PDF 后续）
 - [x] 创建任务步骤数不超过接入前（不增加用户操作路径）（`Garak-Scan` 与其他任务类型操作路径完全一致）
 
 ### 安全验收
 
 - [x] API Key 等凭证不明文出现在任何日志、数据库字段（`GarakScanParams.APIKey` 字段 `json:"-"` 不序列化）
 - [ ] 证据详情按角色权限正确访问控制（前端首期未实现字段级 RBAC）
-- [ ] 数据保留策略生效（90 天后自动清理测试）（首期未实现）
+- [x] 数据保留策略生效（90 天后自动清理测试）（**迭代 2 已完成**：`common/websocket/finding_retention.go::StartFindingRetentionJob` 后台 goroutine，可通过 `FINDING_RETENTION_DAYS` 环境变量调整或禁用，默认 90 天；提供 `RunFindingRetentionOnce` 供管理员/测试触发）
 - [ ] 管理员访问审计日志完整（首期未实现）
 
 ### 性能验收

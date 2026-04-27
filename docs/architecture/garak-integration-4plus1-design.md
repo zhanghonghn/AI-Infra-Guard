@@ -784,10 +784,13 @@ trace_id 格式：`AIG-{timestamp}-{random8}`，全链路透传到日志与响�
 | 策略配置 YAML | `data/garak_policies/fast|standard|deep.yaml` | ✅ 已实现 |
 | 前端服务定义 | `mcpServices.garakScan` i18n | ✅ 已实现 |
 | 前端报告组件 (Xle) | `main-CxUmbQGI.js` bundle patch | ✅ 已实现 |
-| Finding DB 持久化 | `pkg/database/` 新增表 | ⏳ 首期未实现 |
+| Finding DB 持久化 | `pkg/database/finding.go` 新增 `Finding`/`RetestBaseline` 表 + `FindingStore` | ✅ 已实现（迭代 2） |
 | 前端 RBAC 字段过滤 | Xle 角色判断逻辑 | ⏳ 首期未实现 |
-| 报告导出 PDF/JSON | 前端导出按钮 | ⏳ 首期未实现 |
-| 复测与对比 | FR-6 全部功能 | ⏳ 后续 Sprint |
+| 报告导出 JSON | `GET /api/v1/app/findings/{scanId}/export` | ✅ 已实现（迭代 2） |
+| 报告导出 PDF | 前端导出按钮 | ⏳ 后续 Sprint |
+| 复测发起 API | `POST /api/v1/app/scans/{scanId}/retest` | ✅ 已实现（迭代 2） |
+| 复测对比 API | `GET /api/v1/app/scans/compare?baseline=&new=` | ✅ 已实现（迭代 2） |
+| 复测前端页面 | FR-6 UI | ⏳ 后续 Sprint |
 
 ### 12.1 Garak Adapter（Go 侧：`internal/garak/adapter.go`）
 

@@ -78,6 +78,14 @@ func RunWebServer(options *version.Options) {
 	// 自动添加模型
 	modelStore.AutoAddModels()
 
+	// 初始化 Finding 存储（FR-3 / FR-6 持久化层）
+	findingStore := database.NewFindingStore(db)
+	if err := findingStore.Init(); err != nil {
+		log.Errorf("初始化findings表失败: trace_id=system_startup, error=%v", err)
+	}
+	// 启动 Finding 数据保留清理任务（FR-3：默认 90 天）
+	StartFindingRetentionJob(findingStore)
+
 	// 初始化AgentManager
 	agentManager := NewAgentManager()
 
@@ -97,6 +105,7 @@ func RunWebServer(options *version.Options) {
 	sseManager := NewSSEManager()
 
 	taskManager := NewTaskManager(agentManager, taskStore, modelStore, fileConfig, sseManager)
+	taskManager.SetFindingStore(findingStore)
 	err = taskManager.taskStore.ResetRunningTasks()
 	if err != nil {
 		log.Fatalf("重置运行中的任务失败: %v", err)
@@ -231,6 +240,31 @@ func RunWebServer(options *version.Options) {
 				// 终止任务接口
 				tasks.POST("/:sessionId/terminate", func(c *gin.Context) {
 					HandleTerminateTask(c, taskManager)
+				})
+			}
+			// Garak Findings 模块（FR-3 / FR-5 / FR-6）
+			findingsGroup := appSecurity.Group("/findings")
+			{
+				findingsGroup.GET("/:scanId", func(c *gin.Context) {
+					HandleListFindings(c, taskManager)
+				})
+				findingsGroup.GET("/:scanId/export", func(c *gin.Context) {
+					HandleExportFindings(c, taskManager)
+				})
+				findingsGroup.PUT("/status/:findingId", func(c *gin.Context) {
+					HandleUpdateFindingStatus(c, taskManager)
+				})
+			}
+			scansGroup := appSecurity.Group("/scans")
+			{
+				scansGroup.GET("/compare", func(c *gin.Context) {
+					HandleCompareScans(c, taskManager)
+				})
+				scansGroup.GET("/:scanId/retest_history", func(c *gin.Context) {
+					HandleListBaselines(c, taskManager)
+				})
+				scansGroup.POST("/:scanId/retest", func(c *gin.Context) {
+					HandleRetestScan(c, taskManager)
 				})
 			}
 			// 模型管理
