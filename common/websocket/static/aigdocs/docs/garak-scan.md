@@ -132,3 +132,58 @@ A: 修改 `data/garak_policies/` 目录下对应强度的 YAML 文件，在 `pro
 **Q: API Key 会被记录到日志吗？**
 
 A: 不会。API Key 通过环境变量（`GARAK_API_KEY`）注入子进程，不会出现在命令行参数或平台日志中。
+
+## 故障排查（Troubleshooting）
+
+### 1. 「初始化扫描环境」一直显示「准备中」
+
+- **现象**：任务整体已结束，但前端步骤 1「初始化 Garak 扫描环境」仍停留在「准备中」状态。
+- **原因**：旧版 Agent 在切换到步骤 2/3 时未显式回调步骤 1 的完成事件，前端永远收不到 `completed` 状态。
+- **修复**：升级到包含「步骤状态收敛」修复的版本即可（A.I.G v0.x 起）。Agent 现在会在每个步骤推进时显式发送 `AgentStatusCompleted`。
+- **自检**：若仍出现该现象，请检查 Agent 日志中是否有 `初始化 Garak 扫描环境` 对应的 `statusUpdate` 消息，并确认 Agent 与服务端版本一致。
+
+### 2. 提示「扫描失败 - 进程异常退出: exit status 2」
+
+`exit status 2` 来自 `garak-adapter` 子进程，按约定表示「完全失败」。常见根因与处置如下：
+
+| 真实原因 | 典型表现 / 排查方式 | 处置建议 |
+|----------|--------------------|---------|
+| Agent 节点未安装 garak | `pip show garak` 不存在；Agent 日志包含 `Garak 未安装` | 在 Agent 节点执行 `pip install garak` |
+| Python 版本过低 | `python --version` < 3.10 | 升级到 Python 3.10+ |
+| 模型端点不可达 | 自定义部署 / Ollama / vLLM 未配置 `base_url` | 在请求 `content` 中追加正确的 `base_url`（见下） |
+| API Key 无效 / 额度耗尽 | 上游模型返回 401/429 | 更新有效 Key 或释放额度 |
+| 探针组与目标模型不兼容 | `data/garak_policies/` 中启用了不支持的探针 | 缩减探针组或切换 `intensity` 到 `fast` |
+
+> 自 A.I.G 修复版本起，前端「扫描失败」的 desc 字段会优先展示 adapter 输出的 `metadata.error`（例如 `Garak 未安装，无法执行真实扫描`），而非仅显示 `exit status 2`。如仍只看到退出码，请确认 Agent / adapter 版本已同步升级。
+
+### 3. 自定义 / 本地化部署如何配置 `base_url`
+
+以 Ollama 为例：
+
+```json
+{
+  "type": "garak_scan",
+  "content": {
+    "provider": "openai",
+    "model": "llama3:8b",
+    "api_key": "ollama",
+    "base_url": "http://127.0.0.1:11434/v1",
+    "intensity": "fast"
+  }
+}
+```
+
+- `base_url` 仅在显式提供时才会透传到 garak (`--base-url`)，**留空则使用 Provider 默认地址**，避免覆盖原生行为。
+- vLLM / FastChat / OneAPI 等 OpenAI 兼容服务可同样配置 `provider=openai` + `base_url`。
+
+### 4. adapter 退出码约定
+
+`garak-adapter/main.py` 与 Go Agent 之间的退出码契约：
+
+| Exit Code | 含义 | Agent 行为 |
+|-----------|------|-----------|
+| `0` | 全部探针成功 | 步骤 2 标记 `completed`，正常进入步骤 3 |
+| `1` | 部分探针失败，但仍输出可解析 JSON | 步骤 2 标记 `completed`（带「部分探针失败」提示），继续走标准化 |
+| `2` 或其他 | 完全失败（adapter 启动 / Garak 未安装 / 未捕获异常） | 步骤 2 标记 `failed` 并立即终止；不会再推进步骤 3 |
+
+如需在 CI 流水线里识别失败原因，可以读取 adapter 最后一行 stdout JSON 的 `success` 与 `metadata.error` 字段。
