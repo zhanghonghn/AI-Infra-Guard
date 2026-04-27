@@ -1,8 +1,9 @@
 # Garak adapter 依赖
-# 核心：Garak LLM 安全扫描框架（可选，缺失时使用 Mock 模式）
-garak>=0.9.0
+# 核心：Garak LLM 安全扫描框架（**生产环境必装**）
+# adapter 通过子进程方式调用 Garak 官方 CLI（python -m garak）
+garak>=0.14.0
 
 # 说明：
-# - 在生产/CI 环境中请安装 garak 以启用真实扫描
-# - 未安装时适配器以 Mock 模式运行（仅用于接口测试）
-# - 若需隔离安装环境，建议使用 virtualenv 或 Docker
+# - 真实模式（默认）：调用 garak CLI，解析 *.report.jsonl 报告
+# - Mock 模式（仅 CI/烟测）：环境变量 GARAK_MOCK=1 或 main.py --mock 显式开启
+# - garak 未安装时，真实模式会立即抛错而非静默降级，避免误导性结果

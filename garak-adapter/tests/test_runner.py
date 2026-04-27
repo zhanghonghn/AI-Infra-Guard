@@ -20,7 +20,7 @@ ROOT = str(Path(__file__).resolve().parent.parent)
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from runner import AdapterResult, GarakRunner, ProbeResult, ProbeExample  # noqa: E402
+from runner import AdapterResult, GarakRunner, ProbeResult, ProbeExample, RunnerError  # noqa: E402
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -107,34 +107,31 @@ class TestGarakRunnerMockMode(unittest.TestCase):
             model="gpt-4o",
             api_key="sk-test",
             probe_groups=probe_groups,
+            mock=True,
         )
 
     def test_mock_run_returns_adapter_result(self):
         runner = self._make_runner()
-        with unittest.mock.patch("runner.GARAK_AVAILABLE", False):
-            result = runner.run()
+        result = runner.run()
         self.assertIsInstance(result, AdapterResult)
 
     def test_mock_run_has_correct_probe_count(self):
         probes = ["dan.Dan_11_0", "lmrc.Deadnames"]
         runner = self._make_runner(probe_groups=probes)
-        with unittest.mock.patch("runner.GARAK_AVAILABLE", False):
-            result = runner.run()
+        result = runner.run()
         self.assertEqual(len(result.probe_results), len(probes))
 
     def test_mock_run_probe_ids_match(self):
         probes = ["dan.Dan_11_0", "lmrc.Deadnames"]
         runner = self._make_runner(probe_groups=probes)
-        with unittest.mock.patch("runner.GARAK_AVAILABLE", False):
-            result = runner.run()
+        result = runner.run()
         result_ids = {p.probe_id for p in result.probe_results}
         self.assertEqual(result_ids, set(probes))
 
     def test_mock_run_pass_rate_range(self):
         """Pass rate 必须在 [0.0, 1.0] 范围内"""
         runner = self._make_runner()
-        with unittest.mock.patch("runner.GARAK_AVAILABLE", False):
-            result = runner.run()
+        result = runner.run()
         for probe in result.probe_results:
             self.assertGreaterEqual(probe.pass_rate, 0.0)
             self.assertLessEqual(probe.pass_rate, 1.0)
@@ -142,19 +139,29 @@ class TestGarakRunnerMockMode(unittest.TestCase):
     def test_mock_run_empty_probes(self):
         """空探针列表时应返回成功但结果为空"""
         runner = self._make_runner(probe_groups=[])
-        with unittest.mock.patch("runner.GARAK_AVAILABLE", False):
-            result = runner.run()
+        result = runner.run()
         self.assertEqual(len(result.probe_results), 0)
 
     def test_mock_run_to_dict_valid(self):
         """to_dict 输出应可序列化且符合契约键名"""
         runner = self._make_runner()
-        with unittest.mock.patch("runner.GARAK_AVAILABLE", False):
-            result = runner.run()
+        result = runner.run()
         d = result.to_dict()
         json.dumps(d)  # must not raise
         for key in ("scan_id", "success", "probe_results", "metadata", "adapter_version"):
             self.assertIn(key, d)
+
+    def test_mock_via_env_var(self):
+        """通过 GARAK_MOCK 环境变量也应能开启 Mock 模式"""
+        with unittest.mock.patch.dict(os.environ, {"GARAK_MOCK": "1"}):
+            runner = GarakRunner(
+                scan_id="env-mock-001",
+                provider="openai",
+                model="gpt-4o",
+                probe_groups=["dan.Dan_11_0"],
+            )
+            result = runner.run()
+        self.assertEqual(result.garak_version, "mock")
 
 
 class TestContractWithFixture(unittest.TestCase):

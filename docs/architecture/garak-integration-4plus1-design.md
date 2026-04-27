@@ -780,7 +780,7 @@ trace_id 格式：`AIG-{timestamp}-{random8}`，全链路透传到日志与响�
 | Normalizer | `internal/garak/normalizer.go` | ✅ 已实现 |
 | PolicyLoader | `internal/garak/policy.go` | ✅ 已实现 |
 | GarakTask (Agent) | `common/agent/garak_task.go` | ✅ 已实现 |
-| Python 适配器 | `garak-adapter/main.py` + `runner.py` | ✅ 已实现 |
+| Python 适配器 | `garak-adapter/main.py` + `runner.py` | ✅ 已实现（**真集成**：CLI 子进程） |
 | 策略配置 YAML | `data/garak_policies/fast|standard|deep.yaml` | ✅ 已实现 |
 | 前端服务定义 | `mcpServices.garakScan` i18n | ✅ 已实现 |
 | 前端报告组件 (Xle) | `main-CxUmbQGI.js` bundle patch | ✅ 已实现 |
@@ -857,46 +857,59 @@ func MapSeverity(passRate float64) Severity {
 }
 ```
 
-### 12.3 Python 适配器（`garak-adapter/main.py`）
+### 12.3 Python 适配器（`garak-adapter/main.py` + `runner.py`）
 
-```python
-"""
-garak-adapter/main.py
-接收 JSON 参数 → 运行 Garak → 输出标准化 JSON → 退出
+#### 12.3.1 真集成方案：CLI 子进程 + JSONL 报告解析
 
-与 AIG Agent 的契约：
-- 入参：CLI 参数 --params JSON 文件路径
-- 出参：stdout 输出标准 JSON（符合 GarakAdapterOutput schema）
-- 退出码：0=成功, 1=部分失败, 2=完全失败
-"""
-import argparse
-import json
-import sys
-from runner import GarakRunner
+**关键决策（2026-04 修订）**：放弃直接 `import garak` 的 in-process API 调用，改为以子进程方式调用 Garak 官方 CLI（`python -m garak`），并解析其 `<prefix>.report.jsonl` 报告。
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--scan-id", required=True)
-    parser.add_argument("--model-provider", required=True)
-    parser.add_argument("--model-name", required=True)
-    parser.add_argument("--probe-groups", required=True)
-    parser.add_argument("--output-format", default="json")
-    args = parser.parse_args()
+**理由**：
+1. **稳定契约**：Garak 内部 Python API（`probe.probe()`、`Attempt` 字段等）在 0.10/0.13/0.14 等小版本之间多次变化；而 CLI + JSONL 报告是其唯一对外承诺稳定的接口。
+2. **进程隔离**：Garak 加载时会拉起 transformers/torch 等重型依赖，子进程隔离可防止其异常或内存占用拖垮 adapter / Agent。
+3. **超时与并发可控**：`subprocess.run(timeout=...)` + AIG 侧信号量 = 双层并发/时长保护。
+4. **报告字段足够**：`entry_type=eval` 行已包含 `passed/fails/total_evaluated`，正好对应 `ProbeResult` 所需字段；`entry_type=attempt` 行携带 `prompt/outputs/detector_results`，可采样为 `examples`。
 
-    runner = GarakRunner(
-        provider=args.model_provider,
-        model=args.model_name,
-        probe_groups=args.probe_groups.split(","),
-    )
-    
-    result = runner.run()
-    # 输出标准 JSON 到 stdout（Go 侧读取）
-    print(json.dumps(result.to_dict()))
-    sys.exit(0 if result.success else 1)
+#### 12.3.2 调用契约
 
-if __name__ == "__main__":
-    main()
 ```
+AIG Agent (Go) 
+  └─ subprocess: python garak-adapter/main.py
+        └─ subprocess: python -m garak \
+                          --target_type {provider} \
+                          --target_name {model} \
+                          --probes {probe_groups csv} \
+                          --report_prefix {tmp}/{scan_id} \
+                          --generations {n} \
+                          --narrow_output \
+                          [--generator_options '{"openai":{"uri":"..."}}']
+              └─ {tmp}/{scan_id}.report.jsonl  ← runner.py 解析此文件
+```
+
+凭证传递：API Key **绝不出现在命令行**，仅以 `OPENAI_API_KEY`/`AZURE_API_KEY`/`GARAK_API_KEY` 环境变量注入子进程。
+
+#### 12.3.3 Mock 模式
+
+Mock 模式仅用于无 garak 环境的契约测试与 CI 烟测，**默认禁用**：
+- 显式开启：`GarakRunner(..., mock=True)` 或 `python main.py --mock`
+- 环境变量：`GARAK_MOCK=1`
+- 当真实模式被请求但 Garak 未安装时，**抛出 `RunnerError`**（不再静默回退），保证生产链路出问题时能被立刻发现。
+
+#### 12.3.4 main.py 入参
+
+```text
+--scan-id              扫描任务 ID（同时作为 --report_prefix）
+--model-provider       openai / azure / ollama / huggingface / rest / custom / test
+--model-name           模型名（test.* 系列可省略）
+--probe-groups         逗号分隔的 garak probe ID
+--base-url             自定义 LLM API BaseURL（生成 --generator_options.uri）
+--generations          每个 prompt 生成次数，默认 1
+--timeout-sec          garak 子进程总超时，默认 1200s
+--mock                 显式启用 Mock（仅用于测试）
+--output-format        当前仅支持 json
+```
+
+凭证：通过环境变量 `GARAK_API_KEY` 注入；adapter 会同时设置 `OPENAI_API_KEY`/`AZURE_API_KEY`，覆盖主流 generator 的取值路径。
+
 
 ### 12.4 策略配置文件（`data/garak_policies/deep.yaml`）
 

@@ -114,10 +114,10 @@ curl -X POST http://localhost:8088/api/v1/app/taskapi/tasks \
 ## 前提条件
 
 1. **Python 环境**：Agent 节点需安装 Python 3.10+
-2. **Garak 安装**：在 Agent 节点执行 `pip install garak`
+2. **Garak 安装**：在 Agent 节点执行 `pip install garak`（必装；缺失时扫描会立即失败而非降级）
 3. **网络连通**：Agent 节点需能访问目标 LLM API 端点
 
-> 若 Garak 未安装，扫描任务将以 **Mock 模式**运行，仅返回样例数据，适用于接口联调和 CI 测试验证。
+> Mock 模式仅供 CI 烟测使用，**默认禁用**。如需在无 Garak 环境下做接口联调，可在 Agent 端设置环境变量 `GARAK_MOCK=1`，或调用 adapter 时显式追加 `--mock`。生产环境严禁开启。
 
 ## 常见问题
 

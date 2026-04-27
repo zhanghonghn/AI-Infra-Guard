@@ -67,6 +67,18 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--base-url", default="", help="自定义 LLM API BaseURL（本地部署时使用）")
     parser.add_argument(
+        "--generations", type=int, default=1,
+        help="每个 prompt 的生成次数（透传给 garak --generations）",
+    )
+    parser.add_argument(
+        "--timeout-sec", type=int, default=1200,
+        help="garak 子进程超时时间（秒），默认 1200s",
+    )
+    parser.add_argument(
+        "--mock", action="store_true",
+        help="使用 Mock 模式（不调用真实 garak / LLM），仅用于 CI 烟测",
+    )
+    parser.add_argument(
         "--output-format",
         choices=["json"],
         default="json",
@@ -96,6 +108,9 @@ def main() -> int:
         api_key=api_key,
         base_url=args.base_url,
         probe_groups=probe_groups,
+        generations=args.generations,
+        timeout_sec=args.timeout_sec,
+        mock=args.mock,
     )
 
     try:
