@@ -1,36 +1,95 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Layout, Menu, theme, Typography } from 'antd';
 import {
   AppstoreOutlined,
   BookOutlined,
+  CloudDownloadOutlined,
   ExperimentOutlined,
   InfoCircleOutlined,
   RobotOutlined,
   SafetyCertificateOutlined,
+  SettingOutlined,
   UnorderedListOutlined,
 } from '@ant-design/icons';
+import type { MenuProps } from 'antd';
 import { Link, Outlet, useLocation } from 'react-router-dom';
 import { getVersion } from '@/api/version';
 
 const { Header, Sider, Content } = Layout;
 
-interface NavItem {
-  key: string;
-  icon: React.ReactNode;
-  label: string;
-}
+type MenuItem = Required<MenuProps>['items'][number];
 
 // Top-level navigation. New pages should add a route in App.tsx and an
 // entry here. Keep ordering consistent with the original product IA.
-const NAV_ITEMS: NavItem[] = [
-  { key: '/tasks', icon: <UnorderedListOutlined />, label: '任务列表' },
-  { key: '/knowledge/fingerprints', icon: <BookOutlined />, label: 'AI 应用指纹' },
-  { key: '/knowledge/vulnerabilities', icon: <SafetyCertificateOutlined />, label: '漏洞库' },
-  { key: '/knowledge/mcp', icon: <AppstoreOutlined />, label: 'MCP 插件' },
-  { key: '/knowledge/evaluations', icon: <ExperimentOutlined />, label: '评测集' },
-  { key: '/models', icon: <RobotOutlined />, label: '模型管理' },
-  { key: '/about', icon: <InfoCircleOutlined />, label: '关于' },
+const NAV_ITEMS: MenuItem[] = [
+  {
+    key: '/tasks',
+    icon: <UnorderedListOutlined />,
+    label: <Link to="/tasks">任务列表</Link>,
+  },
+  {
+    key: '/knowledge/fingerprints',
+    icon: <BookOutlined />,
+    label: <Link to="/knowledge/fingerprints">AI 应用指纹</Link>,
+  },
+  {
+    key: '/knowledge/vulnerabilities',
+    icon: <SafetyCertificateOutlined />,
+    label: <Link to="/knowledge/vulnerabilities">漏洞库</Link>,
+  },
+  {
+    key: '/knowledge/mcp',
+    icon: <AppstoreOutlined />,
+    label: <Link to="/knowledge/mcp">MCP 插件</Link>,
+  },
+  {
+    key: '/knowledge/evaluations',
+    icon: <ExperimentOutlined />,
+    label: <Link to="/knowledge/evaluations">评测集</Link>,
+  },
+  {
+    key: 'system',
+    icon: <SettingOutlined />,
+    label: '系统配置',
+    children: [
+      {
+        key: '/system/models',
+        icon: <RobotOutlined />,
+        label: <Link to="/system/models">模型管理</Link>,
+      },
+      {
+        key: '/system/data-update',
+        icon: <CloudDownloadOutlined />,
+        label: <Link to="/system/data-update">数据更新</Link>,
+      },
+      {
+        key: '/system/info',
+        icon: <InfoCircleOutlined />,
+        label: <Link to="/system/info">系统信息</Link>,
+      },
+    ],
+  },
+  {
+    key: '/about',
+    icon: <InfoCircleOutlined />,
+    label: <Link to="/about">关于</Link>,
+  },
 ];
+
+/** Flatten the menu tree so we can match a route prefix to the deepest key. */
+function flattenKeys(items: MenuItem[]): string[] {
+  const out: string[] = [];
+  for (const item of items) {
+    if (!item) continue;
+    const key = String((item as { key: React.Key }).key);
+    if (key.startsWith('/')) out.push(key);
+    const children = (item as { children?: MenuItem[] }).children;
+    if (children) out.push(...flattenKeys(children));
+  }
+  return out;
+}
+
+const ALL_KEYS = flattenKeys(NAV_ITEMS);
 
 export default function AppLayout() {
   const location = useLocation();
@@ -43,11 +102,21 @@ export default function AppLayout() {
       .catch(() => undefined);
   }, []);
 
-  // Highlight the deepest-matching nav entry.
-  const selectedKey =
-    NAV_ITEMS.map((i) => i.key)
-      .filter((k) => location.pathname.startsWith(k))
-      .sort((a, b) => b.length - a.length)[0] ?? '/tasks';
+  // Highlight the deepest-matching nav entry. A leaf with key `/system/models`
+  // wins over a notional prefix `/system` because we sort by key length desc.
+  const selectedKey = useMemo(
+    () =>
+      ALL_KEYS.filter((k) => location.pathname.startsWith(k)).sort(
+        (a, b) => b.length - a.length,
+      )[0] ?? '/tasks',
+    [location.pathname],
+  );
+
+  // Auto-open the parent submenu when one of its children is active.
+  const defaultOpenKeys = useMemo(
+    () => (selectedKey.startsWith('/system/') ? ['system'] : []),
+    [selectedKey],
+  );
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
@@ -74,12 +143,9 @@ export default function AppLayout() {
         <Menu
           mode="inline"
           selectedKeys={[selectedKey]}
+          defaultOpenKeys={defaultOpenKeys}
           style={{ borderInlineEnd: 'none' }}
-          items={NAV_ITEMS.map((item) => ({
-            key: item.key,
-            icon: item.icon,
-            label: <Link to={item.key}>{item.label}</Link>,
-          }))}
+          items={NAV_ITEMS}
         />
       </Sider>
       <Layout>
@@ -107,3 +173,4 @@ export default function AppLayout() {
     </Layout>
   );
 }
+

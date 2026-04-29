@@ -7,6 +7,9 @@ import Findings from '@/pages/Findings';
 import Fingerprints from '@/pages/Fingerprints';
 import Placeholder from '@/pages/Placeholder';
 import About from '@/pages/About';
+import SystemModels from '@/pages/system/Models';
+import SystemDataUpdate from '@/pages/system/DataUpdate';
+import SystemInfo from '@/pages/system/SystemInfo';
 
 export default function App() {
   return (
@@ -44,16 +47,19 @@ export default function App() {
             }
           />
         </Route>
-        <Route
-          path="models"
-          element={
-            <Placeholder title="模型管理" apiHint="GET /api/v1/app/models" />
-          }
-        />
+        <Route path="system">
+          <Route index element={<Navigate to="/system/models" replace />} />
+          <Route path="models" element={<SystemModels />} />
+          <Route path="data-update" element={<SystemDataUpdate />} />
+          <Route path="info" element={<SystemInfo />} />
+        </Route>
+        {/* Backwards-compatible alias for the old top-level entry. */}
+        <Route path="models" element={<Navigate to="/system/models" replace />} />
         <Route path="about" element={<About />} />
         <Route path="*" element={<Navigate to="/tasks" replace />} />
       </Route>
     </Routes>
   );
 }
+
 
