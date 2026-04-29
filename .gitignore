@@ -16,3 +16,8 @@ tests
 
 # OpenClaw internal workspace file
 openclaw.md
+
+# Frontend
+node_modules
+frontend/dist
+
