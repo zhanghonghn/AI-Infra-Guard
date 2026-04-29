@@ -5,7 +5,9 @@ import TaskCreate from '@/pages/TaskCreate';
 import TaskDetail from '@/pages/TaskDetail';
 import Findings from '@/pages/Findings';
 import Fingerprints from '@/pages/Fingerprints';
-import Placeholder from '@/pages/Placeholder';
+import Vulnerabilities from '@/pages/Vulnerabilities';
+import McpPlugins from '@/pages/McpPlugins';
+import Evaluations from '@/pages/Evaluations';
 import About from '@/pages/About';
 import SystemModels from '@/pages/system/Models';
 import SystemDataUpdate from '@/pages/system/DataUpdate';
@@ -22,30 +24,9 @@ export default function App() {
         <Route path="scans/:scanId/findings" element={<Findings />} />
         <Route path="knowledge">
           <Route path="fingerprints" element={<Fingerprints />} />
-          <Route
-            path="vulnerabilities"
-            element={
-              <Placeholder
-                title="漏洞库"
-                apiHint="GET /api/v1/knowledge/vulnerabilities"
-              />
-            }
-          />
-          <Route
-            path="mcp"
-            element={
-              <Placeholder title="MCP 插件" apiHint="GET /api/v1/knowledge/mcp" />
-            }
-          />
-          <Route
-            path="evaluations"
-            element={
-              <Placeholder
-                title="评测集"
-                apiHint="GET /api/v1/knowledge/evaluations"
-              />
-            }
-          />
+          <Route path="vulnerabilities" element={<Vulnerabilities />} />
+          <Route path="mcp" element={<McpPlugins />} />
+          <Route path="evaluations" element={<Evaluations />} />
         </Route>
         <Route path="system">
           <Route index element={<Navigate to="/system/models" replace />} />

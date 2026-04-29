@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Alert,
+  AutoComplete,
   Button,
   Card,
   Form,
@@ -12,6 +13,7 @@ import {
   Select,
   Space,
   Spin,
+  Tag,
   Typography,
   Upload,
   message,
@@ -21,9 +23,18 @@ import PageHeader from '@/components/PageHeader';
 import { listModels } from '@/api/models';
 import { uploadTaskFile } from '@/api/files';
 import { createTask, taskSseUrl } from '@/api/tasks';
+import { listAgentNames, listEvaluations } from '@/api/knowledge';
 import type { ModelEntry } from '@/types/model';
-import type { CreateTaskRequest, InAppTaskType } from '@/types/task';
-import { genId } from '@/utils/task';
+import type {
+  CreateTaskRequest,
+  InAppTaskType,
+  TaskAttachment,
+} from '@/types/task';
+import {
+  genId,
+  TASK_CLONE_STORAGE_KEY,
+  TASK_LANG_STORAGE_KEY,
+} from '@/utils/task';
 
 // --- Task type catalogue ----------------------------------------------------
 
@@ -69,7 +80,14 @@ const INTENSITY_OPTIONS = [
   { value: 'deep', label: 'Deep (~90min)' },
 ];
 
-const REDTEAM_DATASETS = [
+const GARAK_PROVIDERS = [
+  { value: 'openai', label: 'openai' },
+  { value: 'huggingface', label: 'huggingface' },
+];
+
+// Hard-coded fallbacks used only when the evaluations API fails or is empty,
+// so the form remains usable. Server-loaded names take precedence.
+const FALLBACK_REDTEAM_DATASETS = [
   'JailBench-Tiny',
   'JailbreakPrompts-Tiny',
   'ChatGPT-Jailbreak-Prompts',
@@ -77,10 +95,10 @@ const REDTEAM_DATASETS = [
   'HarmfulEvalBenchmark',
 ];
 
-const GARAK_PROVIDERS = [
-  { value: 'openai', label: 'openai' },
-  { value: 'huggingface', label: 'huggingface' },
-];
+// Loose RFC-ish target validation. We accept full URLs, host:port, and bare
+// hostnames / IPs — the backend does the strict parsing later. We only flag
+// obviously bad lines (whitespace inside the token, or empty after split).
+const TARGET_RE = /^[A-Za-z0-9._:\-/?=&%#@+,;~!$()*[\]]+$/;
 
 function modelLabel(m: ModelEntry): string {
   const n = m.model?.note ? ` (${m.model.note})` : '';
@@ -116,18 +134,147 @@ function openSseAndWait(
   });
 }
 
+// --- Clone payload (shared with TaskList) ----------------------------------
+
+interface ClonePayload {
+  taskType?: string;
+  title?: string;
+  content?: string;
+  params?: Record<string, unknown>;
+  attachments?: TaskAttachment[];
+  countryIsoCode?: string;
+}
+
+function readClonePayload(): ClonePayload | null {
+  try {
+    const raw = sessionStorage.getItem(TASK_CLONE_STORAGE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as ClonePayload;
+  } catch {
+    return null;
+  }
+}
+
+// Map the raw `taskType` from a stored task back to the in-app form key.
+// Both PascalCase ("AI-Infra-Scan") and lowercase ("ai_infra_scan") forms
+// are accepted; unknown types fall back to AI-Infra-Scan.
+function normalizeTaskType(t: string | undefined): InAppTaskType {
+  const norm = (t || '').toLowerCase().replace(/_/g, '-');
+  switch (norm) {
+    case 'ai-infra-scan':
+      return 'AI-Infra-Scan';
+    case 'mcp-scan':
+      return 'Mcp-Scan';
+    case 'agent-scan':
+      return 'Agent-Scan';
+    case 'model-redteam-report':
+      return 'Model-Redteam-Report';
+    case 'garak-scan':
+      return 'Garak-Scan';
+    default:
+      return 'AI-Infra-Scan';
+  }
+}
+
+// Build the initial form values for a given task type, optionally seeded
+// from a clone payload.
+function buildInitialValues(
+  type: InAppTaskType,
+  clone: ClonePayload | null,
+): Record<string, unknown> {
+  const params = (clone?.params as Record<string, unknown> | undefined) || {};
+  const language =
+    clone?.countryIsoCode ||
+    localStorage.getItem(TASK_LANG_STORAGE_KEY) ||
+    'zh';
+  switch (type) {
+    case 'AI-Infra-Scan': {
+      const target = Array.isArray(params.target)
+        ? (params.target as string[]).join('\n')
+        : clone?.content || '';
+      return {
+        target,
+        timeout: (params.timeout as number) ?? 30,
+        model_id: params.model_id,
+        language,
+      };
+    }
+    case 'Mcp-Scan':
+      return {
+        content: clone?.content || '',
+        model_id: params.model_id,
+        thread: (params.thread as number) ?? 4,
+        language,
+      };
+    case 'Agent-Scan':
+      return {
+        agent_id: params.agent_id,
+        model_id: params.model_id,
+        prompt: clone?.content || '',
+        language,
+      };
+    case 'Model-Redteam-Report': {
+      const ds = (params.dataset as Record<string, unknown> | undefined) || {};
+      return {
+        model_id: params.model_id,
+        eval_model_id: params.eval_model_id,
+        dataFile: (ds.dataFile as string[]) || ['JailBench-Tiny'],
+        numPrompts: (ds.numPrompts as number) ?? 100,
+        randomSeed: (ds.randomSeed as number) ?? 42,
+        prompt: clone?.content || '',
+        language,
+      };
+    }
+    case 'Garak-Scan':
+      return {
+        provider: (params.provider as string) || 'openai',
+        model: (params.model as string) || clone?.content || '',
+        api_key: params.api_key,
+        base_url: params.base_url,
+        intensity: (params.intensity as string) || 'fast',
+        language,
+      };
+  }
+}
+
 // --- Page ------------------------------------------------------------------
 
 export default function TaskCreate() {
   const navigate = useNavigate();
-  const [taskType, setTaskType] = useState<InAppTaskType>('AI-Infra-Scan');
+  const [searchParams] = useSearchParams();
+  const cloneFromQuery = searchParams.get('clone');
+
+  // Read the clone payload exactly once on mount (lazy useState init,
+  // since useRef has no lazy-init form). Stored in a ref afterwards so
+  // we can null it out after consuming or after the user clicks
+  // "clear clone data" without triggering a re-render.
+  const [cloneInit] = useState<ClonePayload | null>(() =>
+    cloneFromQuery ? readClonePayload() : null,
+  );
+  const cloneRef = useRef<ClonePayload | null>(cloneInit);
+  const initialType = useMemo<InAppTaskType>(
+    () => normalizeTaskType(cloneRef.current?.taskType),
+    [],
+  );
+
+  const [taskType, setTaskType] = useState<InAppTaskType>(initialType);
   const [models, setModels] = useState<ModelEntry[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
+  const [agentNames, setAgentNames] = useState<string[]>([]);
+  const [datasetNames, setDatasetNames] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [uploadedUrl, setUploadedUrl] = useState<string | null>(null);
+  // Live-parsed AI-Infra-Scan target preview.
+  const [targetPreview, setTargetPreview] = useState<{
+    valid: string[];
+    invalid: string[];
+  }>({ valid: [], invalid: [] });
   const [form] = Form.useForm();
   const sessionIdRef = useRef<string>(genId());
+  const cloneAppliedRef = useRef(false);
+
+  // --- Initial side effects: load models + reference data ---------------
 
   useEffect(() => {
     setModelsLoading(true);
@@ -135,20 +282,94 @@ export default function TaskCreate() {
       .then((m) => setModels(m ?? []))
       .catch(() => undefined)
       .finally(() => setModelsLoading(false));
+    listAgentNames()
+      .then((names) => setAgentNames(names ?? []))
+      .catch(() => undefined);
+    // Pre-load a generous page of evaluation names so the redteam dropdown
+    // has the user's full library available without an extra search step.
+    listEvaluations({ page: 1, size: 200 })
+      .then((r) => setDatasetNames((r?.items ?? []).map((e) => e.name)))
+      .catch(() => undefined);
   }, []);
 
-  // Reset transient state when switching task type.
+  // Reset form whenever the task type changes. If we still have a pending
+  // clone payload (matching the new type) on the *first* render after mount,
+  // re-apply it so e.g. switching to MCP after cloning an MCP task keeps
+  // the values; otherwise fall back to plain defaults.
   useEffect(() => {
+    const clone = cloneRef.current;
+    const useClone =
+      !cloneAppliedRef.current &&
+      clone &&
+      normalizeTaskType(clone.taskType) === taskType;
+    const initial = buildInitialValues(taskType, useClone ? clone : null);
     form.resetFields();
+    form.setFieldsValue(initial);
     setUploadProgress(null);
-    setUploadedUrl(null);
+    // For Mcp-Scan, restore the first attachment URL if cloning.
+    if (
+      useClone &&
+      taskType === 'Mcp-Scan' &&
+      clone?.attachments &&
+      clone.attachments.length > 0
+    ) {
+      setUploadedUrl(clone.attachments[0].fileUrl);
+    } else {
+      setUploadedUrl(null);
+    }
+    if (useClone) {
+      cloneAppliedRef.current = true;
+    }
+    // Refresh sessionId for every fresh form so a previously failed submit
+    // can't poison the next attempt's SSE channel.
     sessionIdRef.current = genId();
+    // Also recompute the AI-Infra target preview from the seeded value.
+    if (taskType === 'AI-Infra-Scan') {
+      computeTargetPreview(String(initial.target ?? ''));
+    } else {
+      setTargetPreview({ valid: [], invalid: [] });
+    }
   }, [taskType, form]);
 
   const modelOptions = useMemo(
     () => models.map((m) => ({ value: m.model_id, label: modelLabel(m) })),
     [models],
   );
+
+  const agentOptions = useMemo(
+    () => agentNames.map((n) => ({ value: n, label: n })),
+    [agentNames],
+  );
+
+  // Merge live evaluation names with the legacy fallback list, dedup, sort.
+  const datasetOptions = useMemo(() => {
+    const seen = new Set<string>();
+    const out: { value: string; label: string }[] = [];
+    for (const n of [...datasetNames, ...FALLBACK_REDTEAM_DATASETS]) {
+      if (!n || seen.has(n)) continue;
+      seen.add(n);
+      out.push({ value: n, label: n });
+    }
+    return out;
+  }, [datasetNames]);
+
+  const computeTargetPreview = (raw: string) => {
+    const tokens = raw
+      .split(/[\s,;\n]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    // Dedup while preserving first-seen order.
+    const seen = new Set<string>();
+    const valid: string[] = [];
+    const invalid: string[] = [];
+    for (const t of tokens) {
+      if (seen.has(t)) continue;
+      seen.add(t);
+      if (TARGET_RE.test(t)) valid.push(t);
+      else invalid.push(t);
+    }
+    setTargetPreview({ valid, invalid });
+  };
 
   const handleManualUpload = async (file: File): Promise<boolean> => {
     setUploadProgress(0);
@@ -170,6 +391,12 @@ export default function TaskCreate() {
     const id = genId();
     const timestamp = Date.now();
     const language = (values.language as string) || 'zh';
+    // Persist the user's choice for next time.
+    try {
+      localStorage.setItem(TASK_LANG_STORAGE_KEY, language);
+    } catch {
+      /* ignore quota / privacy mode */
+    }
 
     const base: CreateTaskRequest = {
       id,
@@ -188,10 +415,19 @@ export default function TaskCreate() {
           .split(/[\s,;\n]+/)
           .map((s) => s.trim())
           .filter(Boolean);
-        base.content = targets.join('\n');
+        // Dedup while preserving order.
+        const seen = new Set<string>();
+        const dedup: string[] = [];
+        for (const t of targets) {
+          if (!seen.has(t)) {
+            seen.add(t);
+            dedup.push(t);
+          }
+        }
+        base.content = dedup.join('\n');
         base.params = {
           model_id: values.model_id,
-          target: targets,
+          target: dedup,
           timeout: values.timeout ?? 30,
         };
         break;
@@ -257,6 +493,16 @@ export default function TaskCreate() {
       message.error('请上传源码 zip 或填写远程 MCP 地址');
       return;
     }
+    if (taskType === 'AI-Infra-Scan' && targetPreview.valid.length === 0) {
+      message.error('未识别到任何合法目标，请检查 URL / IP 格式');
+      return;
+    }
+    if (taskType === 'AI-Infra-Scan' && targetPreview.invalid.length > 0) {
+      // Soft warning — backend will perform the authoritative parse.
+      message.warning(
+        `发现 ${targetPreview.invalid.length} 条疑似非法目标，已忽略`,
+      );
+    }
     const req = buildRequest(values);
     setSubmitting(true);
     let es: EventSource | null = null;
@@ -268,6 +514,8 @@ export default function TaskCreate() {
       message.success('任务已创建：' + (resp?.title ?? req.sessionId));
       // The detail page will open its own SSE subscription; close ours
       // *after* navigating to avoid losing the very first events.
+      // Clear the clone payload now that it has been consumed successfully.
+      sessionStorage.removeItem(TASK_CLONE_STORAGE_KEY);
       navigate(`/tasks/${encodeURIComponent(req.sessionId)}`);
     } catch (e) {
       message.error((e as Error).message);
@@ -288,20 +536,51 @@ export default function TaskCreate() {
             <Form.Item
               name="target"
               label="扫描目标"
-              tooltip="支持 URL / IP / 域名，多个用换行或逗号分隔"
+              tooltip="支持 URL / IP / 域名，多个用换行、空格、逗号或分号分隔；自动去重"
               rules={[{ required: true, message: '请填写至少一个扫描目标' }]}
             >
               <Input.TextArea
-                rows={4}
+                rows={5}
                 placeholder={'https://example.com\n10.0.0.1:11434'}
+                onChange={(e) => computeTargetPreview(e.target.value)}
               />
             </Form.Item>
+            {targetPreview.valid.length + targetPreview.invalid.length > 0 ? (
+              <Alert
+                style={{ marginBottom: 16 }}
+                type={targetPreview.invalid.length > 0 ? 'warning' : 'info'}
+                showIcon
+                message={
+                  <Space size={8} wrap>
+                    <span>
+                      已识别 <Tag color="blue">{targetPreview.valid.length}</Tag>{' '}
+                      个有效目标
+                    </span>
+                    {targetPreview.invalid.length > 0 ? (
+                      <span>
+                        ，<Tag color="orange">{targetPreview.invalid.length}</Tag>{' '}
+                        条疑似非法（提交时将被忽略）
+                      </span>
+                    ) : null}
+                  </Space>
+                }
+                description={
+                  targetPreview.invalid.length > 0 ? (
+                    <Typography.Text type="secondary">
+                      非法示例：{targetPreview.invalid.slice(0, 3).join(', ')}
+                    </Typography.Text>
+                  ) : undefined
+                }
+              />
+            ) : null}
             <Form.Item name="timeout" label="超时(秒)" initialValue={30}>
               <InputNumber min={1} max={600} />
             </Form.Item>
             <Form.Item name="model_id" label="辅助分析模型(可选)">
               <Select
                 allowClear
+                showSearch
+                optionFilterProp="label"
                 loading={modelsLoading}
                 options={modelOptions}
                 placeholder="不选则不进行 LLM 辅助分析"
@@ -346,6 +625,8 @@ export default function TaskCreate() {
               rules={[{ required: true, message: '请选择模型' }]}
             >
               <Select
+                showSearch
+                optionFilterProp="label"
                 loading={modelsLoading}
                 options={modelOptions}
                 placeholder="选择已配置的模型"
@@ -361,11 +642,19 @@ export default function TaskCreate() {
           <>
             <Form.Item
               name="agent_id"
-              label="Agent 配置 ID"
-              tooltip="使用 知识库 → Agent 配置 中预先保存的 ID"
-              rules={[{ required: true, message: '请填写 Agent ID' }]}
+              label="Agent 配置"
+              tooltip="从 知识库 → Agent 配置 中选择，或手动填写未在列表中的 ID"
+              rules={[{ required: true, message: '请选择或填写 Agent ID' }]}
             >
-              <Input placeholder="例如 my-dify-agent" />
+              <AutoComplete
+                options={agentOptions}
+                placeholder="例如 my-dify-agent"
+                filterOption={(input, opt) =>
+                  String(opt?.value ?? '')
+                    .toLowerCase()
+                    .includes(input.toLowerCase())
+                }
+              />
             </Form.Item>
             <Form.Item
               name="model_id"
@@ -373,6 +662,8 @@ export default function TaskCreate() {
               rules={[{ required: true, message: '请选择评估模型' }]}
             >
               <Select
+                showSearch
+                optionFilterProp="label"
                 loading={modelsLoading}
                 options={modelOptions}
                 placeholder="选择已配置的模型"
@@ -393,6 +684,8 @@ export default function TaskCreate() {
             >
               <Select
                 mode="multiple"
+                showSearch
+                optionFilterProp="label"
                 loading={modelsLoading}
                 options={modelOptions}
               />
@@ -402,17 +695,25 @@ export default function TaskCreate() {
               label="裁判模型"
               rules={[{ required: true, message: '请选择裁判模型' }]}
             >
-              <Select loading={modelsLoading} options={modelOptions} />
+              <Select
+                showSearch
+                optionFilterProp="label"
+                loading={modelsLoading}
+                options={modelOptions}
+              />
             </Form.Item>
             <Form.Item
               name="dataFile"
               label="数据集"
+              tooltip="来源于 知识库 → 评测集；可选多个"
               rules={[{ required: true, message: '至少选择一个数据集' }]}
               initialValue={['JailBench-Tiny']}
             >
               <Select
                 mode="multiple"
-                options={REDTEAM_DATASETS.map((v) => ({ value: v, label: v }))}
+                showSearch
+                options={datasetOptions}
+                placeholder="选择评测集"
               />
             </Form.Item>
             <Form.Item name="numPrompts" label="样本数" initialValue={100}>
@@ -458,6 +759,8 @@ export default function TaskCreate() {
     }
   };
 
+  const cloneActive = cloneAppliedRef.current && !!cloneRef.current;
+
   return (
     <Card>
       <PageHeader
@@ -469,6 +772,43 @@ export default function TaskCreate() {
           </Button>
         }
       />
+      {cloneActive ? (
+        <Alert
+          type="success"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message={
+            <Space size={6} wrap>
+              <span>
+                已从来源任务克隆参数
+                {cloneRef.current?.title ? (
+                  <>
+                    （<Typography.Text strong>{cloneRef.current.title}</Typography.Text>）
+                  </>
+                ) : null}
+                ，请按需调整后提交。
+              </span>
+              <Button
+                size="small"
+                type="link"
+                onClick={() => {
+                  cloneAppliedRef.current = false;
+                  cloneRef.current = null;
+                  sessionStorage.removeItem(TASK_CLONE_STORAGE_KEY);
+                  // Re-trigger initial values build.
+                  form.resetFields();
+                  form.setFieldsValue(buildInitialValues(taskType, null));
+                  if (taskType === 'AI-Infra-Scan') {
+                    setTargetPreview({ valid: [], invalid: [] });
+                  }
+                }}
+              >
+                清空克隆数据
+              </Button>
+            </Space>
+          }
+        />
+      ) : null}
       <Segmented
         options={TASK_TYPES.map((t) => ({ value: t.value, label: t.label }))}
         value={taskType}
@@ -502,7 +842,16 @@ export default function TaskCreate() {
             <Button type="primary" onClick={onSubmit} loading={submitting}>
               创建任务
             </Button>
-            <Button onClick={() => form.resetFields()}>重置</Button>
+            <Button
+              onClick={() => {
+                form.resetFields();
+                form.setFieldsValue(buildInitialValues(taskType, null));
+                setUploadedUrl(null);
+                setTargetPreview({ valid: [], invalid: [] });
+              }}
+            >
+              重置
+            </Button>
           </Space>
         </Form>
       </Spin>

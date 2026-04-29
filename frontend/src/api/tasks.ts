@@ -34,6 +34,15 @@ export function createTask(req: CreateTaskRequest) {
   return api.post<CreateTaskResponse>('/api/v1/app/tasks', req);
 }
 
+/** PUT /api/v1/app/tasks/:sessionId — rename a task. Backend currently
+ *  accepts only `{title}` and validates title length (≤100). */
+export function updateTaskTitle(sessionId: string, title: string) {
+  return api.put<unknown>(
+    `/api/v1/app/tasks/${encodeURIComponent(sessionId)}`,
+    { title },
+  );
+}
+
 /** DELETE /api/v1/app/tasks/:sessionId */
 export function deleteTask(sessionId: string) {
   return api.delete<unknown>(`/api/v1/app/tasks/${encodeURIComponent(sessionId)}`);
