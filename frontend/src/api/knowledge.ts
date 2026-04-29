@@ -76,3 +76,9 @@ export function getEvaluationDetail(name: string) {
     `/api/v1/knowledge/evaluations/${encodeURIComponent(name)}`,
   );
 }
+
+/** GET /api/v1/knowledge/agent/names — returns the list of saved Agent
+ *  configuration names for the current identity (merged with public). */
+export function listAgentNames() {
+  return api.get<string[]>('/api/v1/knowledge/agent/names');
+}

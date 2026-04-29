@@ -1,7 +1,7 @@
 import { Typography } from 'antd';
 
 interface PageHeaderProps {
-  title: string;
+  title: React.ReactNode;
   description?: React.ReactNode;
   extra?: React.ReactNode;
 }

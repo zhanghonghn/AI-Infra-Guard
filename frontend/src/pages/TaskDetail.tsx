@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   Alert,
   Badge,
   Button,
   Card,
+  Checkbox,
   Col,
   Collapse,
   Descriptions,
@@ -21,14 +22,28 @@ import {
 } from 'antd';
 import {
   ArrowLeftOutlined,
+  CopyOutlined,
+  DownloadOutlined,
+  EditOutlined,
+  ExperimentOutlined,
   ReloadOutlined,
   StopOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import PageHeader from '@/components/PageHeader';
-import { getTaskDetail, terminateTask } from '@/api/tasks';
+import {
+  getTaskDetail,
+  terminateTask,
+  updateTaskTitle,
+} from '@/api/tasks';
 import { useTaskSse } from '@/hooks/useTaskSse';
-import { isTaskFinished, isTaskRunning, formatTime } from '@/utils/task';
+import {
+  formatDuration,
+  formatTime,
+  isTaskFinished,
+  isTaskRunning,
+  TASK_CLONE_STORAGE_KEY,
+} from '@/utils/task';
 import type { TaskDetail, TaskMessage } from '@/types/task';
 
 const STATUS_COLORS: Record<string, string> = {
@@ -56,11 +71,15 @@ function reducePlanState(messages: TaskMessage[]): {
   actionLogs: TaskMessage[];
   toolUses: TaskMessage[];
   statusUpdates: TaskMessage[];
+  // Plan-related events surfaced in the timeline so users can see when
+  // step transitions happened.
+  planEvents: TaskMessage[];
 } {
   const stepsById = new Map<string, PlanStep>();
   const actionLogs: TaskMessage[] = [];
   const toolUses: TaskMessage[] = [];
   const statusUpdates: TaskMessage[] = [];
+  const planEvents: TaskMessage[] = [];
   let liveStatus = '';
   let finalResult: Record<string, unknown> | null = null;
 
@@ -73,6 +92,7 @@ function reducePlanState(messages: TaskMessage[]): {
           if (!t.stepId) continue;
           stepsById.set(t.stepId, { ...stepsById.get(t.stepId), ...t });
         }
+        planEvents.push(m);
         break;
       }
       case 'newPlanStep': {
@@ -87,6 +107,7 @@ function reducePlanState(messages: TaskMessage[]): {
               (ev.timestamp as number) || existing?.startedAt || m.timestamp,
           });
         }
+        planEvents.push(m);
         break;
       }
       case 'liveStatus':
@@ -116,6 +137,7 @@ function reducePlanState(messages: TaskMessage[]): {
     actionLogs,
     toolUses,
     statusUpdates,
+    planEvents,
   };
 }
 
@@ -129,12 +151,49 @@ function statusToStepStatus(
   return 'wait';
 }
 
+// Visible event type filters for the live log timeline.
+const LOG_TYPE_OPTIONS = [
+  { value: 'statusUpdate', label: '状态' },
+  { value: 'toolUsed', label: '工具' },
+  { value: 'actionLog', label: '操作' },
+  { value: 'planUpdate', label: '计划' },
+  { value: 'newPlanStep', label: '步骤' },
+];
+
+const DEFAULT_LOG_TYPES = LOG_TYPE_OPTIONS.map((o) => o.value);
+
+// Trigger a download in the user's browser by creating a temporary blob URL.
+function downloadJson(filename: string, payload: unknown) {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], {
+    type: 'application/json;charset=utf-8',
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  // Allow Safari to grab the blob before revoking.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 export default function TaskDetailPage() {
   const { sessionId = '' } = useParams<{ sessionId: string }>();
   const navigate = useNavigate();
   const [detail, setDetail] = useState<TaskDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [terminating, setTerminating] = useState(false);
+  // Live "now" tick used to keep the running-time counter fresh.
+  const [now, setNow] = useState<number>(() => Date.now());
+  // Live log controls.
+  const [enabledTypes, setEnabledTypes] =
+    useState<string[]>(DEFAULT_LOG_TYPES);
+  const [autoScroll, setAutoScroll] = useState(true);
+  const [paused, setPaused] = useState(false);
+  const logRef = useRef<HTMLDivElement | null>(null);
+  // Track whether we already showed the "task completed" toast for this view.
+  const completedToastShownRef = useRef(false);
 
   const fetchDetail = useCallback(async () => {
     if (!sessionId) return;
@@ -154,7 +213,16 @@ export default function TaskDetailPage() {
   }, [fetchDetail]);
 
   const running = isTaskRunning(detail?.status);
+  const finished = isTaskFinished(detail?.status);
   const sse = useTaskSse(sessionId, running);
+
+  // Tick once per second only while the task is actively running so the
+  // duration counter updates without burning cycles on completed tasks.
+  useEffect(() => {
+    if (!running) return undefined;
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [running]);
 
   // Merge historical (already-stored) and live events. De-dupe by id.
   const allMessages = useMemo<TaskMessage[]>(() => {
@@ -175,7 +243,9 @@ export default function TaskDetailPage() {
   // pick up the final stored status.
   useEffect(() => {
     const hasFinalEvent = sse.events.some((e) => e.type === 'resultUpdate');
-    if (hasFinalEvent) {
+    if (hasFinalEvent && !completedToastShownRef.current) {
+      completedToastShownRef.current = true;
+      message.success('任务已完成');
       fetchDetail();
     }
   }, [sse.events, fetchDetail]);
@@ -194,19 +264,171 @@ export default function TaskDetailPage() {
     }
   };
 
+  const onRename = async (next: string) => {
+    const value = (next || '').trim();
+    if (!detail) return;
+    if (!value) {
+      message.warning('标题不能为空');
+      return;
+    }
+    if (value === detail.title) return;
+    if (value.length > 100) {
+      message.warning('标题不能超过 100 个字符');
+      return;
+    }
+    try {
+      await updateTaskTitle(sessionId, value);
+      message.success('已重命名');
+      setDetail({ ...detail, title: value });
+    } catch {
+      /* handled */
+    }
+  };
+
+  const onClone = () => {
+    if (!detail) return;
+    sessionStorage.setItem(
+      TASK_CLONE_STORAGE_KEY,
+      JSON.stringify({
+        taskType: detail.taskType,
+        title: detail.title,
+        content: detail.content,
+        params: detail.params,
+        attachments: detail.attachments,
+        countryIsoCode: detail.countryIsoCode,
+      }),
+    );
+    navigate(`/tasks/new?clone=${encodeURIComponent(sessionId)}`);
+  };
+
+  const onExport = () => {
+    if (!detail) return;
+    downloadJson(
+      `task-${sessionId}.json`,
+      {
+        ...detail,
+        // Include the live events too so users get the full picture.
+        liveEvents: sse.events,
+      },
+    );
+  };
+
   const isGarak =
     detail?.taskType === 'Garak-Scan' || detail?.taskType === 'garak_scan';
-  const finished = isTaskFinished(detail?.status);
+
+  // Compute task duration. We treat the latest message timestamp as a
+  // proxy for completion time when the backend doesn't expose one.
+  const duration = useMemo(() => {
+    const created = (detail?.createdAt as number | undefined) || 0;
+    if (!created) return null;
+    if (running) return now - created;
+    if (allMessages.length > 0) {
+      const last = allMessages[allMessages.length - 1].timestamp || created;
+      return Math.max(0, last - created);
+    }
+    return null;
+  }, [detail?.createdAt, running, now, allMessages]);
+
+  // Live log timeline events, filtered + capped + (optionally) frozen.
+  const timelineEvents = useMemo(() => {
+    const buckets: TaskMessage[] = [];
+    if (enabledTypes.includes('statusUpdate'))
+      buckets.push(...reduced.statusUpdates);
+    if (enabledTypes.includes('toolUsed')) buckets.push(...reduced.toolUses);
+    if (enabledTypes.includes('actionLog')) buckets.push(...reduced.actionLogs);
+    if (
+      enabledTypes.includes('planUpdate') ||
+      enabledTypes.includes('newPlanStep')
+    ) {
+      for (const m of reduced.planEvents) {
+        if (
+          (m.type === 'planUpdate' && enabledTypes.includes('planUpdate')) ||
+          (m.type === 'newPlanStep' && enabledTypes.includes('newPlanStep'))
+        ) {
+          buckets.push(m);
+        }
+      }
+    }
+    return buckets
+      .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0))
+      .slice(-200);
+  }, [
+    enabledTypes,
+    reduced.statusUpdates,
+    reduced.toolUses,
+    reduced.actionLogs,
+    reduced.planEvents,
+  ]);
+
+  // Snapshot the timeline when paused so it stops appending while the
+  // user inspects an entry; live state keeps accumulating in the
+  // background and is restored on resume. Using state (not a ref) so
+  // React renders consistently.
+  const [frozenTimeline, setFrozenTimeline] = useState<TaskMessage[] | null>(
+    null,
+  );
+  useEffect(() => {
+    if (paused) {
+      // Capture the current view at the moment of pausing.
+      setFrozenTimeline(timelineEvents);
+    } else {
+      setFrozenTimeline(null);
+    }
+    // We deliberately exclude `timelineEvents` so the snapshot is taken
+    // exactly once when `paused` flips to true; otherwise the snapshot
+    // would refresh on every new event and defeat the freeze.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paused]);
+  const renderedTimeline = paused
+    ? frozenTimeline ?? timelineEvents
+    : timelineEvents;
+
+  // Auto-scroll to the bottom whenever new events arrive (and not paused).
+  useEffect(() => {
+    if (!autoScroll || paused) return;
+    const el = logRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [renderedTimeline.length, autoScroll, paused]);
 
   return (
     <Spin spinning={loading} tip="加载任务详情...">
       <PageHeader
-        title={detail?.title || sessionId}
+        title={
+          detail ? (
+            <Space size={6}>
+              <Typography.Title
+                level={3}
+                style={{ margin: 0 }}
+                editable={{
+                  onChange: onRename,
+                  tooltip: '重命名任务',
+                  icon: <EditOutlined />,
+                  maxLength: 100,
+                  triggerType: ['icon', 'text'],
+                }}
+              >
+                {detail.title || sessionId}
+              </Typography.Title>
+            </Space>
+          ) : (
+            sessionId
+          )
+        }
         description={
-          <Space size={12}>
-            <span>
-              会话 ID：<code>{sessionId}</code>
-            </span>
+          <Space size={12} wrap>
+            <Space size={4}>
+              <span>会话 ID：</span>
+              <Typography.Text
+                code
+                copyable={{
+                  text: sessionId,
+                  icon: <CopyOutlined />,
+                  tooltips: ['复制', '已复制'],
+                }}
+              >
+                {sessionId}
+              </Typography.Text>
+            </Space>
             {detail?.taskType ? <Tag>{detail.taskType}</Tag> : null}
             {detail?.status ? (
               <Badge
@@ -227,15 +449,33 @@ export default function TaskDetailPage() {
                 {dayjs(detail.createdAt).format('YYYY-MM-DD HH:mm:ss')}
               </span>
             ) : null}
+            {duration !== null ? (
+              <span>
+                {running ? '已运行 ' : '耗时 '}
+                <Tag color={running ? 'blue' : 'default'}>
+                  {formatDuration(duration)}
+                </Tag>
+              </span>
+            ) : null}
           </Space>
         }
         extra={
-          <Space>
+          <Space wrap>
             <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/tasks')}>
               返回
             </Button>
             <Button icon={<ReloadOutlined />} onClick={fetchDetail}>
               刷新
+            </Button>
+            <Button icon={<ExperimentOutlined />} onClick={onClone}>
+              克隆任务
+            </Button>
+            <Button
+              icon={<DownloadOutlined />}
+              onClick={onExport}
+              disabled={!detail}
+            >
+              导出 JSON
             </Button>
             {running ? (
               <Popconfirm title="确认终止该任务?" onConfirm={onTerminate}>
@@ -273,6 +513,7 @@ export default function TaskDetailPage() {
                 <Typography.Paragraph
                   ellipsis={{ rows: 3, expandable: true }}
                   style={{ marginBottom: 0 }}
+                  copyable={!!detail?.content}
                 >
                   {detail?.content || '-'}
                 </Typography.Paragraph>
@@ -330,6 +571,16 @@ export default function TaskDetailPage() {
                 {running ? (
                   <Badge status="processing" text="进行中" />
                 ) : null}
+                {reduced.steps.length > 0 ? (
+                  <Tag>
+                    {
+                      reduced.steps.filter(
+                        (s) => statusToStepStatus(s.status) === 'finish',
+                      ).length
+                    }
+                    /{reduced.steps.length}
+                  </Tag>
+                ) : null}
               </Space>
             }
             size="small"
@@ -337,7 +588,7 @@ export default function TaskDetailPage() {
             {reduced.steps.length === 0 ? (
               <Empty
                 image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description="暂无步骤"
+                description={running ? '正在等待计划事件…' : '暂无步骤'}
               />
             ) : (
               <Steps
@@ -364,7 +615,7 @@ export default function TaskDetailPage() {
         <Col xs={24} md={14}>
           <Card
             title={
-              <Space>
+              <Space wrap>
                 <span>实时日志</span>
                 {running ? (
                   <Badge
@@ -372,24 +623,47 @@ export default function TaskDetailPage() {
                     text={sse.connected ? 'SSE 已连接' : '等待连接'}
                   />
                 ) : null}
+                <Tag>{renderedTimeline.length} 条</Tag>
+              </Space>
+            }
+            extra={
+              <Space size={8} wrap>
+                <Checkbox.Group
+                  options={LOG_TYPE_OPTIONS}
+                  value={enabledTypes}
+                  onChange={(v) => setEnabledTypes(v as string[])}
+                />
+                <Checkbox
+                  checked={autoScroll}
+                  onChange={(e) => setAutoScroll(e.target.checked)}
+                >
+                  自动滚动
+                </Checkbox>
+                <Button
+                  size="small"
+                  type={paused ? 'primary' : 'default'}
+                  onClick={() => setPaused((p) => !p)}
+                  disabled={!running}
+                >
+                  {paused ? '继续' : '暂停'}
+                </Button>
               </Space>
             }
             size="small"
             style={{ marginBottom: 16 }}
           >
-            <Timeline
-              mode="left"
-              style={{ maxHeight: 480, overflow: 'auto' }}
-              items={[...reduced.statusUpdates, ...reduced.toolUses, ...reduced.actionLogs]
-                .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0))
-                .slice(-200)
-                .map((m) => ({
+            <div ref={logRef} style={{ maxHeight: 480, overflow: 'auto' }}>
+              <Timeline
+                mode="left"
+                items={renderedTimeline.map((m) => ({
                   label: formatTime(m.timestamp),
                   color:
                     m.type === 'toolUsed'
                       ? 'blue'
                       : m.type === 'actionLog'
                       ? 'gray'
+                      : m.type === 'planUpdate' || m.type === 'newPlanStep'
+                      ? 'purple'
                       : 'green',
                   children: (
                     <div>
@@ -398,19 +672,40 @@ export default function TaskDetailPage() {
                     </div>
                   ),
                 }))}
-            />
-            {reduced.statusUpdates.length +
-              reduced.toolUses.length +
-              reduced.actionLogs.length ===
-            0 ? (
+              />
+            </div>
+            {renderedTimeline.length === 0 ? (
               <Empty
                 image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description="暂无日志事件"
+                description={
+                  running
+                    ? '尚未收到匹配筛选条件的事件'
+                    : '暂无日志事件'
+                }
               />
             ) : null}
           </Card>
 
-          <Card title="最终结果" size="small">
+          <Card
+            title="最终结果"
+            size="small"
+            extra={
+              reduced.finalResult ? (
+                <Button
+                  size="small"
+                  icon={<DownloadOutlined />}
+                  onClick={() =>
+                    downloadJson(
+                      `task-${sessionId}-result.json`,
+                      reduced.finalResult,
+                    )
+                  }
+                >
+                  下载
+                </Button>
+              ) : null
+            }
+          >
             {reduced.finalResult ? (
               <pre
                 style={{
@@ -437,9 +732,23 @@ export default function TaskDetailPage() {
   );
 }
 
-/** Best-effort one-line summary of an event payload. */
+/** Best-effort one-line summary of an event payload. Keep this readable —
+ *  power users can see the full payload via the JSON exporter. */
 function summarizeEvent(m: TaskMessage): string {
   const ev = m.event || {};
+  if (m.type === 'newPlanStep') {
+    const title = (ev.title as string) || (ev.stepId as string) || '';
+    return title ? `▶ ${title}` : '新增步骤';
+  }
+  if (m.type === 'planUpdate') {
+    const tasks = ev.tasks as { stepId?: string }[] | undefined;
+    return `计划更新（${tasks?.length ?? 0} 步）`;
+  }
+  if (m.type === 'toolUsed') {
+    const name = (ev.tool as string) || (ev.name as string) || '';
+    const brief = (ev.brief as string) || (ev.description as string) || '';
+    return [name && `🔧 ${name}`, brief].filter(Boolean).join(' — ');
+  }
   const candidates = [
     'brief',
     'description',

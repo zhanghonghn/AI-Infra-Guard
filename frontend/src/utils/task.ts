@@ -51,3 +51,24 @@ export function isTaskFinished(status: string | undefined): boolean {
     s === 'completed' || s === 'failed' || s === 'terminated' || s === 'error'
   );
 }
+
+/** Format a duration in milliseconds as a short human-readable string,
+ *  e.g. `1h 23m 45s`. Null/undefined/negative inputs render as `0s`. */
+export function formatDuration(ms: number | undefined | null): string {
+  if (ms == null || ms < 0) return '0s';
+  const totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}h ${m}m ${s}s`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+/** sessionStorage key used to hand a "clone source" task between
+ *  TaskList → TaskCreate without exceeding URL length limits. */
+export const TASK_CLONE_STORAGE_KEY = 'aig.taskClone';
+
+/** localStorage key for the user's last-used UI language preference on
+ *  the New Task form. */
+export const TASK_LANG_STORAGE_KEY = 'aig.taskLang';
