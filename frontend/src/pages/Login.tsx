@@ -1,7 +1,9 @@
+import { useState } from 'react';
 import { Button, Card, Form, Input, Typography, message } from 'antd';
 import { LockOutlined, UserOutlined } from '@ant-design/icons';
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
-import { isLoggedIn, loginWithUsername } from '@/utils/auth';
+import { login } from '@/api/auth';
+import { isLoggedIn, saveLoginSession } from '@/utils/auth';
 
 type LoginForm = {
   username: string;
@@ -23,6 +25,7 @@ function resolveReturnPath(state: LoginLocationState | null): string {
 }
 
 export default function Login() {
+  const [submitting, setSubmitting] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
   const returnPath = resolveReturnPath((location.state as LoginLocationState) ?? null);
@@ -31,10 +34,23 @@ export default function Login() {
     return <Navigate to={returnPath} replace />;
   }
 
-  const onFinish = (values: LoginForm) => {
-    loginWithUsername(values.username);
-    message.success('登录成功');
-    navigate(returnPath, { replace: true });
+  const onFinish = async (values: LoginForm) => {
+    try {
+      setSubmitting(true);
+      const resp = await login({
+        username: values.username.trim(),
+        password: values.password,
+      });
+      saveLoginSession({
+        username: resp.username,
+        token: resp.token,
+        expiresAt: resp.expires_at,
+      });
+      message.success('登录成功');
+      navigate(returnPath, { replace: true });
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -53,6 +69,9 @@ export default function Login() {
         </Typography.Title>
         <Typography.Paragraph type="secondary">
           登录后可访问任务管理与知识库功能。
+        </Typography.Paragraph>
+        <Typography.Paragraph type="secondary" style={{ marginTop: -8 }}>
+          默认管理员账号：admin / admin
         </Typography.Paragraph>
         <Form<LoginForm> layout="vertical" onFinish={onFinish} autoComplete="off">
           <Form.Item
@@ -73,7 +92,7 @@ export default function Login() {
             <Input.Password prefix={<LockOutlined />} placeholder="请输入密码" />
           </Form.Item>
           <Form.Item style={{ marginBottom: 0 }}>
-            <Button type="primary" htmlType="submit" block>
+            <Button type="primary" htmlType="submit" block loading={submitting}>
               登录
             </Button>
           </Form.Item>

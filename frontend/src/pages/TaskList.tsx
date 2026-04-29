@@ -38,17 +38,25 @@ import type { TaskListItem } from '@/types/task';
 // third-party taskapi/* endpoint stores lowercase_underscored values.
 const TASK_TYPE_OPTIONS = [
   { value: '', label: '全部类型' },
-  { value: 'AI-Infra-Scan', label: 'AI Infra Scan (in-app)' },
-  { value: 'Mcp-Scan', label: 'MCP Scan (in-app)' },
-  { value: 'Agent-Scan', label: 'Agent Scan (in-app)' },
-  { value: 'Model-Redteam-Report', label: 'Model Redteam (in-app)' },
-  { value: 'Garak-Scan', label: 'Garak Scan (in-app)' },
-  { value: 'ai_infra_scan', label: 'AI Infra Scan (taskapi)' },
-  { value: 'mcp_scan', label: 'MCP Scan (taskapi)' },
-  { value: 'agent_scan', label: 'Agent Scan (taskapi)' },
-  { value: 'model_redteam_report', label: 'Model Redteam (taskapi)' },
-  { value: 'garak_scan', label: 'Garak Scan (taskapi)' },
+  { value: 'AI-Infra-Scan', label: 'AI 基础设施扫描（应用内）' },
+  { value: 'Mcp-Scan', label: 'MCP 扫描（应用内）' },
+  { value: 'Agent-Scan', label: 'Agent 扫描（应用内）' },
+  { value: 'Model-Redteam-Report', label: '大模型安全体检（应用内）' },
+  { value: 'Garak-Scan', label: 'Garak 扫描（应用内）' },
+  { value: 'ai_infra_scan', label: 'AI 基础设施扫描（TaskAPI）' },
+  { value: 'mcp_scan', label: 'MCP 扫描（TaskAPI）' },
+  { value: 'agent_scan', label: 'Agent 扫描（TaskAPI）' },
+  { value: 'model_redteam_report', label: '大模型安全体检（TaskAPI）' },
+  { value: 'garak_scan', label: 'Garak 扫描（TaskAPI）' },
 ];
+
+const TASK_TYPE_LABEL_MAP = TASK_TYPE_OPTIONS.reduce<Record<string, string>>(
+  (acc, option) => {
+    if (option.value) acc[option.value] = option.label;
+    return acc;
+  },
+  {},
+);
 
 const STATUS_OPTIONS = [
   { value: '', label: '全部状态' },
@@ -270,7 +278,7 @@ export default function TaskList() {
         dataIndex: 'taskType',
         key: 'taskType',
         width: 180,
-        render: (v: string) => <Tag>{v}</Tag>,
+        render: (v: string) => <Tag>{TASK_TYPE_LABEL_MAP[v] ?? v}</Tag>,
       },
       {
         title: '状态',

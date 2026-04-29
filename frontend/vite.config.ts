@@ -7,7 +7,7 @@ import path from 'node:path';
 // publish into common/websocket/static/ for Go embed.
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
-  const apiTarget = env.VITE_API_TARGET || 'http://127.0.0.1:8088';
+  const apiTarget = env.VITE_API_TARGET || 'http://127.0.0.1:8089';
 
   return {
     plugins: [react()],

@@ -76,6 +76,10 @@ func RunWebServer(options *version.Options) {
 		log.Errorf("初始化tasks表失败: trace_id=system_startup, error=%v", err)
 		log.Fatalf("初始化tasks表失败: %v", err)
 	}
+	if err := ensureDefaultAdminUser(taskStore); err != nil {
+		log.Errorf("初始化默认admin用户失败: trace_id=system_startup, error=%v", err)
+		log.Fatalf("初始化默认admin用户失败: %v", err)
+	}
 
 	// 初始化模型存储
 	modelStore := database.NewModelStore(db)
@@ -125,6 +129,12 @@ func RunWebServer(options *version.Options) {
 	// API 版本分组
 	v1 := r.Group("/api/v1")
 	{
+		auth := v1.Group("/auth")
+		{
+			auth.POST("/login", handleLogin(taskStore))
+			auth.GET("/me", setupIdentityMiddleware(), handleMe())
+		}
+
 		v1.GET("/images/:path", func(context *gin.Context) {
 			path := context.Param("path")
 			if strings.Contains(path, "..") {
@@ -396,21 +406,5 @@ func RunWebServer(options *version.Options) {
 	if err := r.Run(options.WebServerAddr); err != nil {
 		log.Errorf("Could not start WebSocket server: trace_id=system_startup, error=%s", err)
 		gologger.Errorf("Web服务启动失败: %v", err)
-	}
-}
-
-// 配置身份认证中间件
-func setupIdentityMiddleware() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		// 优先从请求头获取username字段
-		username := c.GetHeader("username")
-
-		// 如果都没有，使用默认的公共用户
-		if username == "" {
-			username = "public_user"
-		}
-		// 存储到gin上下文
-		c.Set("username", username)
-		c.Next()
 	}
 }

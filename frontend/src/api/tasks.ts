@@ -1,4 +1,5 @@
 import { api } from './client';
+import { getAuthToken } from '@/utils/auth';
 import type {
   CreateTaskRequest,
   CreateTaskResponse,
@@ -64,6 +65,9 @@ export function terminateTask(sessionId: string) {
  * default identity) for read-only event streams.
  */
 export function taskSseUrl(sessionId: string): string {
-  return `/api/v1/app/tasks/sse/${encodeURIComponent(sessionId)}`;
+  const token = getAuthToken();
+  const base = `/api/v1/app/tasks/sse/${encodeURIComponent(sessionId)}`;
+  if (!token) return base;
+  return `${base}?token=${encodeURIComponent(token)}`;
 }
 

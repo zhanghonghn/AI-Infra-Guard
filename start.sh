@@ -8,6 +8,9 @@ set -e
 WEB_SERVER_ADDR="${WEB_SERVER_ADDR:-0.0.0.0:8089}"
 START_AGENT="${START_AGENT:-auto}" # auto | 1 | true | on | 0 | false | off
 WEB_SERVER_PORT="${WEB_SERVER_ADDR##*:}"
+START_FRONTEND="${START_FRONTEND:-false}" # auto | 1 | true | on | 0 | false | off
+FRONTEND_ADDR="${FRONTEND_ADDR:-127.0.0.1:5173}"
+FRONTEND_PORT="${FRONTEND_ADDR##*:}"
 KILL_OLD="${KILL_OLD:-false}"
 
 is_truthy() {
@@ -182,11 +185,33 @@ if [ "${AGENT_ENABLED}" = "true" ] && [ ! -x "${AGENT_BIN_PATH}" ]; then
 fi
 
 cleanup() {
+	if [ -n "${FRONTEND_PID:-}" ] && kill -0 "${FRONTEND_PID}" >/dev/null 2>&1; then
+		kill "${FRONTEND_PID}" >/dev/null 2>&1 || true
+	fi
 	if [ -n "${AGENT_PID:-}" ] && kill -0 "${AGENT_PID}" >/dev/null 2>&1; then
 		kill "${AGENT_PID}" >/dev/null 2>&1 || true
 	fi
 }
 trap cleanup EXIT INT TERM
+
+FRONTEND_ENABLED="false"
+if is_falsey "${START_FRONTEND}"; then
+	FRONTEND_ENABLED="false"
+elif is_truthy "${START_FRONTEND}"; then
+	FRONTEND_ENABLED="true"
+elif [ "$(echo "${START_FRONTEND}" | tr '[:upper:]' '[:lower:]')" = "auto" ] && [ -f "${SCRIPT_DIR}/frontend/package.json" ]; then
+	FRONTEND_ENABLED="true"
+fi
+
+if [ "${FRONTEND_ENABLED}" = "true" ] && [ ! -f "${SCRIPT_DIR}/frontend/package.json" ]; then
+	echo "Error: START_FRONTEND=${START_FRONTEND}, but frontend/package.json not found." >&2
+	exit 127
+fi
+
+if [ "${FRONTEND_ENABLED}" = "true" ] && ! command -v npm >/dev/null 2>&1; then
+	echo "Error: START_FRONTEND=${START_FRONTEND}, but npm not found." >&2
+	exit 127
+fi
 
 WEB_REUSE_EXISTING="false"
 if ss -lnt "( sport = :${WEB_SERVER_PORT} )" 2>/dev/null | grep -q ":${WEB_SERVER_PORT}"; then
@@ -238,9 +263,46 @@ else
 fi
 
 if [ -n "${WEB_PID:-}" ]; then
+	if [ "${FRONTEND_ENABLED}" = "true" ]; then
+		if ss -lnt "( sport = :${FRONTEND_PORT} )" 2>/dev/null | grep -q ":${FRONTEND_PORT}"; then
+			if is_truthy "${KILL_OLD}"; then
+				echo "检测到前端端口 ${FRONTEND_PORT} 已被占用，正在清理旧进程..."
+				if command -v lsof >/dev/null 2>&1; then
+					FPIDS="$(lsof -t -iTCP:${FRONTEND_PORT} -sTCP:LISTEN 2>/dev/null || true)"
+					if [ -n "${FPIDS}" ]; then
+						kill ${FPIDS} 2>/dev/null || true
+						sleep 1
+					fi
+				fi
+			fi
+
+			if ss -lnt "( sport = :${FRONTEND_PORT} )" 2>/dev/null | grep -q ":${FRONTEND_PORT}"; then
+				echo "检测到前端端口 ${FRONTEND_PORT} 已被占用，复用现有前端服务。"
+			else
+				echo "启动前端服务（${FRONTEND_ADDR}）..."
+				(
+					cd "${SCRIPT_DIR}/frontend"
+					npm run dev -- --host "${FRONTEND_ADDR%:*}" --port "${FRONTEND_PORT}"
+				) >> "${BASE_DIR}/logs/frontend.log" 2>&1 &
+				FRONTEND_PID=$!
+				echo "前端服务已启动（pid=${FRONTEND_PID}）"
+			fi
+		else
+			echo "启动前端服务（${FRONTEND_ADDR}）..."
+			(
+				cd "${SCRIPT_DIR}/frontend"
+				npm run dev -- --host "${FRONTEND_ADDR%:*}" --port "${FRONTEND_PORT}"
+			) >> "${BASE_DIR}/logs/frontend.log" 2>&1 &
+			FRONTEND_PID=$!
+			echo "前端服务已启动（pid=${FRONTEND_PID}）"
+		fi
+	fi
+
 	wait "${WEB_PID}"
 elif [ -n "${AGENT_PID:-}" ]; then
 	wait "${AGENT_PID}"
+elif [ -n "${FRONTEND_PID:-}" ]; then
+	wait "${FRONTEND_PID}"
 else
 	echo "未启动新进程（仅复用现有 Web，且 Agent 未启用）。"
 fi

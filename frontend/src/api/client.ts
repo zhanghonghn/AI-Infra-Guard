@@ -1,7 +1,7 @@
 import axios, { AxiosError, AxiosInstance, AxiosRequestConfig } from 'axios';
 import { message } from 'antd';
 import type { ApiResponse } from '@/types/api';
-import { getCurrentUsername } from '@/utils/auth';
+import { getAuthToken, getCurrentUsername, logout } from '@/utils/auth';
 
 /**
  * Shared axios instance.
@@ -20,9 +20,12 @@ const instance: AxiosInstance = axios.create({
 // Inject the lightweight identity header expected by setupIdentityMiddleware.
 instance.interceptors.request.use((config) => {
   const username = getCurrentUsername() || 'public_user';
+  const authToken = getAuthToken();
   config.headers = config.headers ?? {};
-  // axios v1 supports plain assignment for both AxiosHeaders and plain objects.
   (config.headers as Record<string, string>).username = username;
+  if (authToken) {
+    (config.headers as Record<string, string>).Authorization = `Bearer ${authToken}`;
+  }
   return config;
 });
 
@@ -46,6 +49,12 @@ async function request<T>(config: AxiosRequestConfig): Promise<T> {
     return resp.data as unknown as T;
   } catch (err) {
     if (err instanceof AxiosError) {
+      if (err.response?.status === 401) {
+        logout();
+        if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+          window.location.href = '/login';
+        }
+      }
       const msg =
         err.response?.data?.message ||
         err.message ||
