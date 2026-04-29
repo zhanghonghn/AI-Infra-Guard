@@ -31,6 +31,7 @@ import {
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import PageHeader from '@/components/PageHeader';
+import TaskResult from '@/components/TaskResult';
 import {
   getTaskDetail,
   terminateTask,
@@ -707,18 +708,10 @@ export default function TaskDetailPage() {
             }
           >
             {reduced.finalResult ? (
-              <pre
-                style={{
-                  background: '#f6f8fa',
-                  padding: 12,
-                  borderRadius: 4,
-                  maxHeight: 360,
-                  overflow: 'auto',
-                  margin: 0,
-                }}
-              >
-                {JSON.stringify(reduced.finalResult, null, 2)}
-              </pre>
+              <TaskResult
+                event={reduced.finalResult}
+                taskType={detail?.taskType}
+              />
             ) : (
               <Empty
                 image={Empty.PRESENTED_IMAGE_SIMPLE}
