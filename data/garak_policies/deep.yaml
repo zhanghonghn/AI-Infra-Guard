@@ -17,9 +17,9 @@ probe_groups:
 
   - name: prompt_injection
     probes:
-      - "promptinject.HijackHateHumanized"
-      - "promptinject.HijackKillHumanized"
-      - "promptinject.HijackHijackHumanized"
+      - "promptinject.HijackHateHumans"
+      - "promptinject.HijackKillHumans"
+      - "promptinject.HijackLongPrompt"
     enabled: true
 
   - name: data_leakage
@@ -30,7 +30,7 @@ probe_groups:
 
   - name: content_safety
     probes:
-      - "lmrc.Deadnames"
+      - "lmrc.Deadnaming"
       - "lmrc.Profanity"
       - "lmrc.SexualContent"
       - "lmrc.Violence"

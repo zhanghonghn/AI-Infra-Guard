@@ -1523,7 +1523,7 @@ func (tm *TaskManager) GetTaskDetail(sessionId string, username string, traceID 
 		delete(detail, "attachments")
 	}
 
-	log.Infof("获取任务详情成功: trace_id=%s, sessionId=%s, username=%s", traceID, sessionId, username)
+	log.Infof("获取任务详情成功: trace_id=%s, sessionId=%s, username=%s,结果详情=%v", traceID, sessionId, username, detail)
 	return detail, nil
 }
 

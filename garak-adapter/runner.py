@@ -158,6 +158,21 @@ _PROVIDER_MAP = {
     "test": "test",
 }
 
+_DEFAULT_GENERATOR_CLASS = {
+    "openai": "OpenAIGenerator",
+    "azure": "AzureOpenAIGenerator",
+    "ollama": "OllamaGenerator",
+}
+
+_PROBE_ALIAS_CANDIDATES = {
+    "promptinject.HijackHateHumanized": ["promptinject.HijackHateHumans", "promptinject.HijackHateHumanized"],
+    "promptinject.HijackHateHumans": ["promptinject.HijackHateHumans", "promptinject.HijackHateHumanized"],
+    "promptinject.HijackKillHumanized": ["promptinject.HijackKillHumans", "promptinject.HijackKillHumanized"],
+    "promptinject.HijackKillHumans": ["promptinject.HijackKillHumans", "promptinject.HijackKillHumanized"],
+    "lmrc.Deadnames": ["lmrc.Deadnaming", "lmrc.Deadnames"],
+    "lmrc.Deadnaming": ["lmrc.Deadnaming", "lmrc.Deadnames"],
+}
+
 
 def _utc_iso_now() -> str:
     return datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
@@ -253,6 +268,7 @@ class GarakRunner:
     def _real_run(self) -> List[ProbeResult]:
         """通过 ``python -m garak`` 子进程执行扫描，并解析 JSONL 报告。"""
         target_type = self._resolve_target_type()
+        probes = self._normalize_probe_groups(self.probe_groups)
 
         # 在隔离的临时目录中运行 garak，避免污染用户 ~/.local/share/garak
         with tempfile.TemporaryDirectory(prefix=f"garak-{self.scan_id}-") as workdir:
@@ -263,7 +279,7 @@ class GarakRunner:
             argv = [
                 self.python_bin, "-m", "garak",
                 "--target_type", target_type,
-                "--probes", ",".join(self.probe_groups),
+                "--probes", ",".join(probes),
                 "--report_prefix", report_prefix,
                 "--generations", str(self.generations),
                 "--narrow_output",
@@ -311,7 +327,18 @@ class GarakRunner:
                     )
                 )
 
-            return self._parse_report(report_path)
+            results = self._parse_report(report_path)
+            total_attempts = sum(max(0, int(r.total_attempts)) for r in results)
+            if total_attempts == 0:
+                tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-20:]
+                raise RunnerError(
+                    "Garak 扫描未产生有效评估数据（total_attempts=0）；"
+                    "请检查模型凭证/连通性/限流配置。最后输出: {tail}".format(
+                        tail=" | ".join(tail)
+                    )
+                )
+
+            return results
 
     # ---------- 辅助方法 ----------
 
@@ -349,12 +376,16 @@ class GarakRunner:
         module = parts[0]
         cls = parts[1] if len(parts) > 1 else None
         inner = {"uri": self.base_url}
+        if not cls:
+            cls = _DEFAULT_GENERATOR_CLASS.get(module)
         if cls:
             return {module: {cls: inner}}
         return {module: inner}
 
     def _build_subprocess_env(self) -> dict:
         env = os.environ.copy()
+        if self.base_url:
+            env.setdefault("OPENAI_BASE_URL", self.base_url)
         if self.api_key:
             # 同时设置多种 provider 常用的 key 名，避免 generator 取不到
             env.setdefault("OPENAI_API_KEY", self.api_key)
@@ -363,6 +394,65 @@ class GarakRunner:
         # 关闭 garak 的 telemetry / 交互模式（如果未来支持）
         env.setdefault("GARAK_NO_TELEMETRY", "1")
         return env
+
+    def _normalize_probe_groups(self, probe_groups: List[str]) -> List[str]:
+        """按当前 Garak 安装版本可用探针，规范化输入探针列表。"""
+        available = self._discover_available_probes()
+        normalized: List[str] = []
+        seen = set()
+
+        for probe in probe_groups:
+            p = (probe or "").strip()
+            if not p:
+                continue
+            chosen = self._choose_probe_alias(p, available)
+            if chosen != p:
+                logger.warning("探针名版本兼容映射: %s -> %s", p, chosen)
+            if chosen in seen:
+                continue
+            seen.add(chosen)
+            normalized.append(chosen)
+
+        return normalized
+
+    def _choose_probe_alias(self, probe: str, available: set[str]) -> str:
+        candidates = _PROBE_ALIAS_CANDIDATES.get(probe)
+        if not candidates:
+            return probe
+        if available:
+            for candidate in candidates:
+                if candidate in available:
+                    return candidate
+        return candidates[0]
+
+    @staticmethod
+    def _discover_available_probes() -> set[str]:
+        """从 Garak plugin_cache 中解析当前安装版本支持的 probes。"""
+        try:
+            import garak  # noqa: F401
+        except ImportError:
+            return set()
+
+        cache_path = Path(garak.__file__).resolve().parent / "resources" / "plugin_cache.json"
+        if not cache_path.is_file():
+            return set()
+
+        try:
+            with cache_path.open("r", encoding="utf-8") as f:
+                payload = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return set()
+
+        if not isinstance(payload, dict):
+            return set()
+
+        probes = set()
+        for key in payload.keys():
+            if not isinstance(key, str):
+                continue
+            if key.startswith("probes."):
+                probes.add(key[len("probes."):])
+        return probes
 
     @staticmethod
     def _locate_report(report_prefix: str, workdir: str) -> Optional[Path]:
@@ -469,7 +559,9 @@ class GarakRunner:
                 best_per_probe[probe] = merged
 
         for probe, rec in best_per_probe.items():
-            total_eval = int(rec.get("total_evaluated") or 0)
+            total_eval = _to_int(rec.get("total_evaluated"))
+            if total_eval <= 0:
+                total_eval = _to_int(rec.get("total_processed"))
             passed = int(rec.get("passed") or 0)
             fails = int(rec.get("fails") or 0)
             # garak ``passed`` 字段是 "通过的次数"，pass_rate 直接由它计算
@@ -539,6 +631,13 @@ def _extract_response_text(attempt_rec: dict) -> str:
         if isinstance(first, str):
             return first
     return ""
+
+
+def _to_int(value) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _redact_argv(argv: Iterable[str]) -> List[str]:

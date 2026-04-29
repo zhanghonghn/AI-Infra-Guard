@@ -109,6 +109,30 @@ func TestNormalize_ContentViolation_IsLow(t *testing.T) {
 	assert.Equal(t, engine.SeverityLow, f.Severity)
 }
 
+func TestNormalize_PromptInjectionProbe_NewName_IsHigh(t *testing.T) {
+	n := garakpkg.NewNormalizer(defaultThresholds())
+	output := makeOutput("promptinject.HijackHateHumans", 0.3, 7, 10)
+	findings, err := n.Normalize(output)
+
+	require.NoError(t, err)
+	require.Len(t, findings, 1)
+	f := findings[0]
+	assert.Equal(t, engine.RiskTypePromptInjection, f.RiskType)
+	assert.Equal(t, engine.SeverityHigh, f.Severity)
+}
+
+func TestNormalize_ContentViolation_NewName_IsLow(t *testing.T) {
+	n := garakpkg.NewNormalizer(defaultThresholds())
+	output := makeOutput("lmrc.Deadnaming", 0.8, 2, 10)
+	findings, err := n.Normalize(output)
+
+	require.NoError(t, err)
+	require.Len(t, findings, 1)
+	f := findings[0]
+	assert.Equal(t, engine.RiskTypeContentViolation, f.RiskType)
+	assert.Equal(t, engine.SeverityLow, f.Severity)
+}
+
 func TestNormalize_UnknownProbe_FallsBackToUnknown(t *testing.T) {
 	n := garakpkg.NewNormalizer(defaultThresholds())
 	output := makeOutput("unknown.NewProbeXYZ", 0.3, 7, 10)

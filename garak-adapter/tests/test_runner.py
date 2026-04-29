@@ -11,6 +11,7 @@ garak-adapter 单元测试
 import json
 import os
 import sys
+import tempfile
 import unittest
 import unittest.mock
 from pathlib import Path
@@ -163,6 +164,64 @@ class TestGarakRunnerMockMode(unittest.TestCase):
             result = runner.run()
         self.assertEqual(result.garak_version, "mock")
 
+    def test_build_generator_options_openai_default_class(self):
+        """openai provider 在未显式类名时应注入 OpenAIGenerator 层级"""
+        runner = GarakRunner(
+            scan_id="opt-001",
+            provider="openai",
+            model="gpt-4o",
+            base_url="https://api.example.com/v1",
+            probe_groups=["dan.Dan_11_0"],
+            mock=True,
+        )
+        opts = runner._build_generator_options("openai")
+        self.assertEqual(
+            opts,
+            {"openai": {"OpenAIGenerator": {"uri": "https://api.example.com/v1"}}},
+        )
+
+    def test_build_subprocess_env_sets_openai_base_url(self):
+        """提供 base_url 时应同步注入 OPENAI_BASE_URL 环境变量"""
+        runner = GarakRunner(
+            scan_id="env-001",
+            provider="openai",
+            model="gpt-4o",
+            api_key="sk-test",
+            base_url="https://api.example.com/v1",
+            probe_groups=["dan.Dan_11_0"],
+            mock=True,
+        )
+        env = runner._build_subprocess_env()
+        self.assertEqual(env.get("OPENAI_BASE_URL"), "https://api.example.com/v1")
+
+    def test_normalize_probe_groups_prefers_available_new_names(self):
+        runner = self._make_runner(probe_groups=["promptinject.HijackHateHumanized", "lmrc.Deadnames"])
+        with unittest.mock.patch.object(
+            GarakRunner,
+            "_discover_available_probes",
+            return_value={"promptinject.HijackHateHumans", "lmrc.Deadnaming"},
+        ):
+            probes = runner._normalize_probe_groups(runner.probe_groups)
+        self.assertEqual(probes, ["promptinject.HijackHateHumans", "lmrc.Deadnaming"])
+
+    def test_normalize_probe_groups_fallback_without_plugin_cache(self):
+        runner = self._make_runner(probe_groups=["promptinject.HijackHateHumanized", "lmrc.Deadnames"])
+        with unittest.mock.patch.object(GarakRunner, "_discover_available_probes", return_value=set()):
+            probes = runner._normalize_probe_groups(runner.probe_groups)
+        self.assertEqual(probes, ["promptinject.HijackHateHumans", "lmrc.Deadnaming"])
+
+    def test_normalize_probe_groups_deduplicates_after_alias(self):
+        runner = self._make_runner(
+            probe_groups=["lmrc.Deadnames", "lmrc.Deadnaming", "promptinject.HijackHateHumans"]
+        )
+        with unittest.mock.patch.object(
+            GarakRunner,
+            "_discover_available_probes",
+            return_value={"lmrc.Deadnaming", "promptinject.HijackHateHumans"},
+        ):
+            probes = runner._normalize_probe_groups(runner.probe_groups)
+        self.assertEqual(probes, ["lmrc.Deadnaming", "promptinject.HijackHateHumans"])
+
 
 class TestContractWithFixture(unittest.TestCase):
     """
@@ -212,6 +271,68 @@ class TestContractWithFixture(unittest.TestCase):
     def test_total_attempts_and_failures_consistent(self):
         for probe in self.fixture["probe_results"]:
             self.assertGreaterEqual(probe["total_attempts"], probe["failures"])
+
+
+class TestReportParsingCompatibility(unittest.TestCase):
+    def test_parse_report_fallback_to_total_processed(self):
+        lines = [
+            {
+                "entry_type": "attempt",
+                "status": 2,
+                "probe_classname": "dan.Dan_11_0",
+                "prompt": {"turns": [{"content": {"text": "p"}}]},
+                "outputs": [{"text": "r"}],
+                "detector_results": {"det": [0.1]},
+            },
+            {
+                "entry_type": "eval",
+                "probe": "dan.Dan_11_0",
+                "detector": "dan.DAN",
+                "passed": 1,
+                "fails": 0,
+                "total_processed": 1,
+            },
+        ]
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False, encoding="utf-8") as f:
+            path = f.name
+            for rec in lines:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        self.addCleanup(lambda: os.path.exists(path) and os.remove(path))
+
+        results = GarakRunner._parse_report(Path(path))
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].total_attempts, 1)
+
+    def test_real_run_zero_attempts_raises_runner_error(self):
+        runner = GarakRunner(
+            scan_id="zero-attempts",
+            provider="openai",
+            model="gpt-4o",
+            probe_groups=["dan.Dan_11_0"],
+        )
+
+        fake_proc = unittest.mock.Mock()
+        fake_proc.stdout = ""
+        fake_proc.stderr = "upstream auth failed"
+        fake_proc.returncode = 0
+
+        class _DummyTmpDir:
+            def __init__(self, p):
+                self._p = p
+            def __enter__(self):
+                return self._p
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                return False
+
+        with unittest.mock.patch("runner.tempfile.TemporaryDirectory", return_value=_DummyTmpDir("/tmp")), \
+            unittest.mock.patch("runner.subprocess.run", return_value=fake_proc), \
+            unittest.mock.patch.object(GarakRunner, "_locate_report", return_value=Path("/tmp/fake.report.jsonl")), \
+            unittest.mock.patch.object(GarakRunner, "_parse_report", return_value=[
+                ProbeResult("dan.Dan_11_0", "det", 0, 0, 1.0, []),
+            ]):
+            with self.assertRaises(RunnerError) as ctx:
+                runner._real_run()
+        self.assertIn("total_attempts=0", str(ctx.exception))
 
 
 if __name__ == "__main__":

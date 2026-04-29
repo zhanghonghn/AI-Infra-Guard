@@ -15,6 +15,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -66,6 +67,85 @@ func TestGarakInitDoneTitle(t *testing.T) {
 	}
 	if got := garakInitDoneTitle(""); got != "Initialization completed" {
 		t.Errorf("empty should fallback to en, got %q", got)
+	}
+}
+
+func TestHydrateGarakParams_FromNestedModel(t *testing.T) {
+	raw := map[string]interface{}{
+		"model": map[string]interface{}{
+			"model":    "hunyuan-turbos-latest",
+			"token":    "sk-IgPTRm19zBXsF4qy2e60917cCeF04750A63b1e9aD46e1c31",
+			"base_url": "https://api.ocoolai.com/v1",
+		},
+	}
+	b, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("marshal raw params failed: %v", err)
+	}
+
+	params := &GarakScanParams{}
+	hydrateGarakParams(b, params)
+
+	if params.ModelName != "hunyuan-turbos-latest" {
+		t.Errorf("unexpected model name: %q", params.ModelName)
+	}
+	if params.APIKey != "sk-IgPTRm19zBXsF4qy2e60917cCeF04750A63b1e9aD46e1c31" {
+		t.Errorf("unexpected api key: %q", params.APIKey)
+	}
+	if params.BaseURL != "https://api.ocoolai.com/v1" {
+		t.Errorf("unexpected base url: %q", params.BaseURL)
+	}
+	if params.ModelProvider != "openai" {
+		t.Errorf("unexpected provider: %q", params.ModelProvider)
+	}
+}
+
+func TestHydrateGarakParams_KeepExplicitValues(t *testing.T) {
+	raw := map[string]interface{}{
+		"model": map[string]interface{}{
+			"model":    "x",
+			"token":    "y",
+			"base_url": "http://localhost:11434/v1",
+		},
+	}
+	b, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("marshal raw params failed: %v", err)
+	}
+
+	params := &GarakScanParams{
+		ModelProvider: "custom",
+		ModelName:     "manual-model",
+		APIKey:        "manual-token",
+		BaseURL:       "https://manual.example/v1",
+	}
+	hydrateGarakParams(b, params)
+
+	if params.ModelProvider != "custom" || params.ModelName != "manual-model" || params.APIKey != "manual-token" || params.BaseURL != "https://manual.example/v1" {
+		t.Fatalf("explicit values should not be overridden, got %+v", params)
+	}
+}
+
+func TestInferModelProvider(t *testing.T) {
+	cases := []struct {
+		name    string
+		baseURL string
+		want    string
+	}{
+		{name: "azure", baseURL: "https://xxx.openai.azure.com", want: "azure"},
+		{name: "ollama by port", baseURL: "http://127.0.0.1:11434/v1", want: "ollama"},
+		{name: "custom localhost", baseURL: "http://localhost:8000/v1", want: "custom"},
+		{name: "openai default", baseURL: "https://api.openai.com/v1", want: "openai"},
+		{name: "empty default", baseURL: "", want: "openai"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := inferModelProvider(c.baseURL)
+			if got != c.want {
+				t.Fatalf("inferModelProvider(%q)=%q want %q", c.baseURL, got, c.want)
+			}
+		})
 	}
 }
 
@@ -136,12 +216,50 @@ func TestBuildAdapterFailureDetail(t *testing.T) {
 			t.Errorf("expected runErr to win when metadata.error is whitespace, got %q", got)
 		}
 	})
+	t.Run("unknown probes 给出版本不兼容提示", func(t *testing.T) {
+		parsed := &garakpkg.AdapterOutput{Metadata: garakpkg.OutputMeta{Error: "❌Unknown probes❌: promptinject.HijackHateHumanized,lmrc.Deadnames"}}
+		got := buildAdapterFailureDetail(errors.New("exit status 2"), parsed, nil)
+		if !strings.Contains(got, "探针与当前版本不兼容") {
+			t.Fatalf("expected version mismatch hint, got %q", got)
+		}
+		if !strings.Contains(got, "Unknown probes") {
+			t.Fatalf("expected raw detail retained, got %q", got)
+		}
+	})
+	t.Run("API key 缺失给出凭证提示", func(t *testing.T) {
+		raw := "Garak 子进程未生成报告文件 (rc=0)；最后输出: Put the OpenAI API key in the OPENAI_API_KEY environment variable"
+		got := buildAdapterFailureDetail(errors.New(raw), nil, nil)
+		if !strings.Contains(got, "模型凭证缺失或无效") {
+			t.Fatalf("expected credential hint, got %q", got)
+		}
+	})
+}
+
+func TestSummarizeFailureBrief(t *testing.T) {
+	t.Run("空字符串回退", func(t *testing.T) {
+		if got := summarizeFailureBrief("   "); got != "扫描失败" {
+			t.Fatalf("unexpected fallback brief: %q", got)
+		}
+	})
+	t.Run("长文本截断", func(t *testing.T) {
+		long := strings.Repeat("a", 120)
+		got := summarizeFailureBrief(long)
+		if len(got) > 75 || !strings.HasSuffix(got, "...") {
+			t.Fatalf("expected truncated brief, got %q", got)
+		}
+	})
+	t.Run("多空格归一化", func(t *testing.T) {
+		got := summarizeFailureBrief("凭证   缺失\n请检查")
+		if got != "凭证 缺失 请检查" {
+			t.Fatalf("unexpected normalized brief: %q", got)
+		}
+	})
 }
 
 // ---------------- buildAdapterArgv ----------------
 
 func TestBuildAdapterArgv(t *testing.T) {
-	probes := []string{"dan.Dan_11_0", "promptinject.HijackHateHumanized"}
+	probes := []string{"dan.Dan_11_0", "promptinject.HijackHateHumans"}
 	t.Run("无 BaseURL 不透传", func(t *testing.T) {
 		argv := buildAdapterArgv("/opt/garak-adapter", "scan-1", GarakScanParams{
 			ModelProvider: "openai",
@@ -155,12 +273,21 @@ func TestBuildAdapterArgv(t *testing.T) {
 		if !strings.Contains(joined, "--scan-id scan-1") ||
 			!strings.Contains(joined, "--model-provider openai") ||
 			!strings.Contains(joined, "--model-name gpt-4o") ||
-			!strings.Contains(joined, "--probe-groups dan.Dan_11_0,promptinject.HijackHateHumanized") ||
+			!strings.Contains(joined, "--probe-groups dan.Dan_11_0,promptinject.HijackHateHumans") ||
 			!strings.Contains(joined, "--output-format json") {
 			t.Errorf("missing required args: %s", joined)
 		}
 		if strings.Contains(joined, "--base-url") {
 			t.Errorf("base-url should be omitted when empty, got %s", joined)
+		}
+	})
+
+	t.Run("旧探针名自动兼容映射", func(t *testing.T) {
+		legacyProbes := []string{"promptinject.HijackHateHumanized", "lmrc.Deadnames"}
+		argv := buildAdapterArgv("/opt/garak-adapter", "scan-legacy", GarakScanParams{}, legacyProbes)
+		joined := strings.Join(argv, " ")
+		if !strings.Contains(joined, "--probe-groups promptinject.HijackHateHumans,lmrc.Deadnaming") {
+			t.Errorf("legacy probes should be normalized, got: %s", joined)
 		}
 	})
 
@@ -189,6 +316,20 @@ func TestBuildAdapterArgv(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestNormalizeProbeGroups(t *testing.T) {
+	input := []string{" promptinject.HijackHateHumanized ", "lmrc.Deadnames", "dan.Dan_11_0", ""}
+	got := normalizeProbeGroups(input)
+	want := []string{"promptinject.HijackHateHumans", "lmrc.Deadnaming", "dan.Dan_11_0"}
+	if len(got) != len(want) {
+		t.Fatalf("length mismatch: got %d want %d, got=%v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("unexpected value at %d: got %q want %q", i, got[i], want[i])
+		}
+	}
 }
 
 // ---------------- parseAdapterOutput ----------------
@@ -304,6 +445,19 @@ func TestBuildGarakResult_SeverityCounting(t *testing.T) {
 	if result["total"].(int) != len(findings) {
 		t.Errorf("total mismatch: %v", result["total"])
 	}
+	summary, ok := result["summary"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("summary should be map[string]interface{}, got %T", result["summary"])
+	}
+	if summary["total_findings"].(int) != len(findings) {
+		t.Errorf("summary.total_findings mismatch: %v", summary["total_findings"])
+	}
+	if summary["total"].(int) != len(findings) {
+		t.Errorf("summary.total mismatch: %v", summary["total"])
+	}
+	if _, ok := result["results"].([]engine.Finding); !ok {
+		t.Fatalf("results should be []engine.Finding, got %T", result["results"])
+	}
 	if result["garak_version"] != "0.10.0" {
 		t.Errorf("garak_version not propagated: %v", result["garak_version"])
 	}
@@ -324,6 +478,13 @@ func TestBuildGarakResult_NoFindings(t *testing.T) {
 	result := buildGarakResult("scan-empty", output, nil)
 	if result["total"].(int) != 0 {
 		t.Errorf("total should be 0, got %v", result["total"])
+	}
+	summary := result["summary"].(map[string]interface{})
+	if summary["total_findings"].(int) != 0 {
+		t.Errorf("summary.total_findings should be 0, got %v", summary["total_findings"])
+	}
+	if summary["total"].(int) != 0 {
+		t.Errorf("summary.total should be 0, got %v", summary["total"])
 	}
 	bs := result["by_severity"].(map[string]int)
 	for _, sev := range []string{"critical", "high", "medium", "low", "info"} {

@@ -82,8 +82,11 @@ var ProbeToRiskType = map[string]engine.RiskType{
 	"suffix.GCGCached":       engine.RiskTypeJailbreak,
 
 	// 提示注入
+	"promptinject.HijackHateHumans":      engine.RiskTypePromptInjection,
 	"promptinject.HijackHateHumanized":  engine.RiskTypePromptInjection,
+	"promptinject.HijackKillHumans":      engine.RiskTypePromptInjection,
 	"promptinject.HijackKillHumanized":  engine.RiskTypePromptInjection,
+	"promptinject.HijackLongPrompt":      engine.RiskTypePromptInjection,
 	"promptinject.HijackHijackHumanized": engine.RiskTypePromptInjection,
 
 	// 数据泄露
@@ -92,6 +95,7 @@ var ProbeToRiskType = map[string]engine.RiskType{
 	"knownbadsignatures.EICAR":          engine.RiskTypeDataLeakage,
 
 	// 内容安全违规
+	"lmrc.Deadnaming":                   engine.RiskTypeContentViolation,
 	"lmrc.Deadnames":                    engine.RiskTypeContentViolation,
 	"lmrc.Profanity":                    engine.RiskTypeContentViolation,
 	"lmrc.SexualContent":                engine.RiskTypeContentViolation,

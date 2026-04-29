@@ -32,6 +32,7 @@ import (
 
 	"github.com/Tencent/AI-Infra-Guard/common/trpc"
 	_ "github.com/Tencent/AI-Infra-Guard/docs"
+	"github.com/Tencent/AI-Infra-Guard/internal/gologger"
 	version "github.com/Tencent/AI-Infra-Guard/internal/options"
 	"github.com/Tencent/AI-Infra-Guard/pkg/database"
 	"github.com/gin-gonic/gin"
@@ -44,10 +45,17 @@ import (
 var staticFS embed.FS
 
 func RunWebServer(options *version.Options) {
+	if cwd, err := os.Getwd(); err == nil {
+		gologger.Infof("启动Web服务: addr=%s, cwd=%s", options.WebServerAddr, cwd)
+	} else {
+		gologger.Infof("启动Web服务: addr=%s", options.WebServerAddr)
+	}
+
 	// 1. 初始化trpc-go
 	if err := trpc.InitTrpc("./trpc_go.yaml"); err != nil {
-		log.Fatalf("Trpc-go初始化失败: %v", err)
+		gologger.Fatalf("Trpc-go初始化失败: %v。请确认当前目录存在 trpc_go.yaml，或从项目根目录启动。", err)
 	}
+	gologger.Infoln("Trpc-go 初始化成功")
 	log.Infof("Trpc-go initialized successfully: trace_id=system_startup")
 
 	r := gin.Default()
@@ -384,8 +392,10 @@ func RunWebServer(options *version.Options) {
 	})
 
 	log.Infof("Starting WebServer: trace_id=system_startup, addr=%s", options.WebServerAddr)
+	gologger.Infof("Web服务开始监听: %s", options.WebServerAddr)
 	if err := r.Run(options.WebServerAddr); err != nil {
 		log.Errorf("Could not start WebSocket server: trace_id=system_startup, error=%s", err)
+		gologger.Errorf("Web服务启动失败: %v", err)
 	}
 }
 

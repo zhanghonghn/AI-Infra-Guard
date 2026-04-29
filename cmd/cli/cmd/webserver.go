@@ -38,6 +38,7 @@ var webserverCmd = &cobra.Command{
 	Short: "启动Web服务器",
 	Long:  `启动Web服务器功能，提供Web界面进行扫描。`,
 	Run: func(cmd *cobra.Command, args []string) {
+		gologger.StdLogger.Logrus().SetLevel(gologger.InfoLevel)
 		if !strings.Contains(webServerAddr, "127.0.0.1") {
 			gologger.Infoln("请注意，Web服务器监听地址为本地IP,外部用户可访问，可能会导致安全风险，请确保在安全的网络环境下运行。")
 		}

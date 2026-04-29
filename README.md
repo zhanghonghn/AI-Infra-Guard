@@ -103,6 +103,28 @@ Once the service is running, you can access the A.I.G web interface at:
 `http://localhost:8088`
 <br>
 
+### Development Mode (local source)
+
+For local development and debugging, use the `dev.sh` script from the project root. It runs the Web server in foreground (logs visible in terminal), can auto-build missing binaries, and can optionally start Agent.
+
+```bash
+# Default: Web on 127.0.0.1:8089 + Agent enabled
+./dev.sh
+
+# Web only (no Agent)
+START_AGENT=false ./dev.sh
+
+# Auto-kill process already listening on the selected port
+KILL_OLD=true ./dev.sh
+
+# Custom listen address/port
+WEB_SERVER_ADDR=127.0.0.1:8090 ./dev.sh
+```
+
+Default web URL in dev mode:
+`http://127.0.0.1:8089`
+<br>
+
 ### Use from OpenClaw
 
 You can also call A.I.G directly from OpenClaw chat via the `aig-scanner` skill.

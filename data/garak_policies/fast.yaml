@@ -13,12 +13,12 @@ probe_groups:
 
   - name: prompt_injection
     probes:
-      - "promptinject.HijackHateHumanized"
+      - "promptinject.HijackHateHumans"
     enabled: true
 
   - name: content_safety
     probes:
-      - "lmrc.Deadnames"
+      - "lmrc.Deadnaming"
     enabled: true
 
 severity_thresholds:

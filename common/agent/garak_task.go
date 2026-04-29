@@ -70,6 +70,7 @@ func (g *GarakTask) Execute(ctx context.Context, request TaskRequest, callbacks 
 			return fmt.Errorf("解析任务参数失败: %w", err)
 		}
 	}
+	hydrateGarakParams(request.Params, &params)
 
 	language := request.Language
 	if language == "" {
@@ -97,10 +98,10 @@ func (g *GarakTask) Execute(ctx context.Context, request TaskRequest, callbacks 
 		callbacks.StepStatusUpdateCallback(step1, statusID1, AgentStatusFailed, "初始化失败", err.Error())
 		return fmt.Errorf("resolve garak-adapter directory: %w", err)
 	}
-	pythonBin, err := utils.ResolvePythonBin()
+	pythonBin, err := utils.ResolveGarakPythonBin()
 	if err != nil {
 		callbacks.StepStatusUpdateCallback(step1, statusID1, AgentStatusFailed, "初始化失败", err.Error())
-		return fmt.Errorf("resolve python binary: %w", err)
+		return fmt.Errorf("resolve garak python binary: %w", err)
 	}
 	policyDir, err := utils.ResolveGarakPoliciesDir()
 	if err != nil {
@@ -134,7 +135,9 @@ func (g *GarakTask) Execute(ctx context.Context, request TaskRequest, callbacks 
 		gologger.Warnf("加载策略失败，使用 fast 默认探针集: %v", err)
 		probeGroups = defaultFastProbes
 	}
-
+	gologger.Infof("******************");
+	gologger.Infof("Garak 扫描探针列表: %s", strings.Join(probeGroups, ","))
+	gologger.Infof("******************");
 	argv := buildAdapterArgv(garakAdapterDir, scanID, params, probeGroups)
 
 	// 凭证通过环境变量注入（不暴露在命令行参数或日志中）
@@ -168,11 +171,11 @@ func (g *GarakTask) Execute(ctx context.Context, request TaskRequest, callbacks 
 	parsedOutput, parseErr := parseAdapterOutput(outputLines)
 
 	if scanFailed {
+		failureDetail := buildAdapterFailureDetail(err, parsedOutput, parseErr)
 		// 工具状态：标记为 done 但 brief 描述失败原因（项目当前未定义 failed 状态）
 		callbacks.ToolUsedCallback(step2, toolID2, "garak-adapter 失败", []Tool{
-			{ToolId: toolID2, Tool: "garak-adapter", Status: ToolStatusDone, Brief: "扫描失败"},
+			{ToolId: toolID2, Tool: "garak-adapter", Status: ToolStatusDone, Brief: summarizeFailureBrief(failureDetail)},
 		})
-		failureDetail := buildAdapterFailureDetail(err, parsedOutput, parseErr)
 		callbacks.StepStatusUpdateCallback(step2, statusID2, AgentStatusFailed, "扫描失败", failureDetail)
 		tasks[1].Status = SubTaskStatusDone
 		callbacks.PlanUpdateCallback(tasks)
@@ -249,6 +252,72 @@ func (g *GarakTask) Execute(ctx context.Context, request TaskRequest, callbacks 
 	callbacks.PlanUpdateCallback(tasks)
 	callbacks.ResultCallback(result)
 	return nil
+}
+
+// hydrateGarakParams 兼容来自 task_manager 的模型参数结构：
+// params 里可能只有 model_id，但服务端会额外注入 model 对象（{model,token,base_url,...}）。
+// Garak 适配器需要 model_provider/model_name/api_key/base_url，故在此补全。
+func hydrateGarakParams(raw json.RawMessage, params *GarakScanParams) {
+	if params == nil || len(raw) == 0 {
+		return
+	}
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		if strings.TrimSpace(params.ModelProvider) == "" {
+			params.ModelProvider = inferModelProvider(params.BaseURL)
+		}
+		return
+	}
+
+	modelRaw, ok := m["model"]
+	if ok {
+		if modelMap, ok := modelRaw.(map[string]interface{}); ok {
+			if strings.TrimSpace(params.ModelName) == "" {
+				params.ModelName = firstNonEmptyString(modelMap, "model", "model_name", "name")
+			}
+			if strings.TrimSpace(params.APIKey) == "" {
+				params.APIKey = firstNonEmptyString(modelMap, "token", "api_key", "apiKey")
+			}
+			if strings.TrimSpace(params.BaseURL) == "" {
+				params.BaseURL = firstNonEmptyString(modelMap, "base_url", "baseUrl", "endpoint")
+			}
+		}
+	}
+
+	if strings.TrimSpace(params.ModelProvider) == "" {
+		params.ModelProvider = inferModelProvider(params.BaseURL)
+	}
+}
+
+func firstNonEmptyString(m map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		value, ok := m[key]
+		if !ok {
+			continue
+		}
+		if s, ok := value.(string); ok {
+			s = strings.TrimSpace(s)
+			if s != "" {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
+func inferModelProvider(baseURL string) string {
+	v := strings.ToLower(strings.TrimSpace(baseURL))
+	if strings.Contains(v, "azure") {
+		return "azure"
+	}
+	if strings.Contains(v, "11434") || strings.Contains(v, "ollama") {
+		return "ollama"
+	}
+	if strings.Contains(v, "localhost") || strings.Contains(v, "127.0.0.1") {
+		return "custom"
+	}
+	return "openai"
 }
 
 // persistGarakReport 把 Markdown 详细报告落到临时文件并尝试上传到 AIG Server。
@@ -343,27 +412,92 @@ func exitCodeFromError(err error) int {
 // 退化到原始 err.Error()（例如 "进程异常退出: exit status 2"）。
 func buildAdapterFailureDetail(runErr error, parsed *garakpkg.AdapterOutput, parseErr error) string {
 	if parsed != nil && strings.TrimSpace(parsed.Metadata.Error) != "" {
-		return parsed.Metadata.Error
+		return humanizeGarakFailure(strings.TrimSpace(parsed.Metadata.Error))
 	}
 	if runErr != nil {
+		raw := runErr.Error()
 		if parseErr != nil {
-			return fmt.Sprintf("%s（adapter 输出无法解析: %v）", runErr.Error(), parseErr)
+			raw = fmt.Sprintf("%s（adapter 输出无法解析: %v）", raw, parseErr)
 		}
-		return runErr.Error()
+		return humanizeGarakFailure(raw)
 	}
 	return "未知错误"
+}
+
+func humanizeGarakFailure(raw string) string {
+	msg := strings.TrimSpace(raw)
+	if msg == "" {
+		return "未知错误"
+	}
+	lower := strings.ToLower(msg)
+	if strings.Contains(lower, "unknown probes") {
+		return "Garak 探针与当前版本不兼容，请同步策略与 Garak 版本。" + conciseFailureSuffix(msg)
+	}
+	if strings.Contains(lower, "openai_api_key") || strings.Contains(lower, "api key") || strings.Contains(lower, "api_key") {
+		return "模型凭证缺失或无效，请检查模型 API Key/鉴权配置。" + conciseFailureSuffix(msg)
+	}
+	if strings.Contains(msg, "total_attempts=0") || strings.Contains(msg, "未产生有效评估数据") {
+		return "Garak 扫描未产生有效评估数据，请检查模型连通性、配额或限流配置。" + conciseFailureSuffix(msg)
+	}
+	return msg
+}
+
+func conciseFailureSuffix(msg string) string {
+	clean := strings.Join(strings.Fields(strings.TrimSpace(msg)), " ")
+	const maxLen = 240
+	if len(clean) > maxLen {
+		clean = clean[:maxLen] + "..."
+	}
+	return " 详情: " + clean
+}
+
+func summarizeFailureBrief(detail string) string {
+	clean := strings.Join(strings.Fields(strings.TrimSpace(detail)), " ")
+	if clean == "" {
+		return "扫描失败"
+	}
+	const maxLen = 72
+	if len(clean) > maxLen {
+		return clean[:maxLen] + "..."
+	}
+	return clean
 }
 
 // defaultFastProbes 当策略文件缺失时的兜底探针集
 var defaultFastProbes = []string{
 	"dan.Dan_11_0",
-	"promptinject.HijackHateHumanized",
-	"lmrc.Deadnames",
+	"promptinject.HijackHateHumans",
+	"lmrc.Deadnaming",
+}
+
+var garakProbeAliases = map[string]string{
+	"promptinject.HijackHateHumanized": "promptinject.HijackHateHumans",
+	"promptinject.HijackKillHumanized": "promptinject.HijackKillHumans",
+	"lmrc.Deadnames":                   "lmrc.Deadnaming",
+}
+
+func normalizeProbeGroups(probes []string) []string {
+	if len(probes) == 0 {
+		return probes
+	}
+	normalized := make([]string, 0, len(probes))
+	for _, probe := range probes {
+		p := strings.TrimSpace(probe)
+		if p == "" {
+			continue
+		}
+		if alias, ok := garakProbeAliases[p]; ok {
+			gologger.Warnf("Garak 探针名兼容映射: %s -> %s", p, alias)
+			p = alias
+		}
+		normalized = append(normalized, p)
+	}
+	return normalized
 }
 
 func resolveProbeGroups(intensity, policyDir string) ([]string, error) {
 	if policyDir == "" || intensity == "" {
-		return defaultFastProbes, nil
+		return normalizeProbeGroups(defaultFastProbes), nil
 	}
 	loader := garakpkg.NewPolicyLoader(policyDir)
 	if intensity == "" {
@@ -375,12 +509,13 @@ func resolveProbeGroups(intensity, policyDir string) ([]string, error) {
 	}
 	probes := cfg.SelectedProbes()
 	if len(probes) == 0 {
-		return defaultFastProbes, nil
+		return normalizeProbeGroups(defaultFastProbes), nil
 	}
-	return probes, nil
+	return normalizeProbeGroups(probes), nil
 }
 
 func buildAdapterArgv(adapterDir, scanID string, params GarakScanParams, probes []string) []string {
+	probes = normalizeProbeGroups(probes)
 	adapterScript := adapterDir + "/main.py"
 	argv := []string{
 		adapterScript,
@@ -396,6 +531,12 @@ func buildAdapterArgv(adapterDir, scanID string, params GarakScanParams, probes 
 	if strings.TrimSpace(params.BaseURL) != "" {
 		argv = append(argv, "--base-url", params.BaseURL)
 	}
+	// 打印一下 参数供调试（注意不要在日志中泄露敏感信息，例如 API Key）
+	gologger.Infof("******************");
+	gologger.Infof("Garak Adapter 参数: model_provider=%s, model_name=%s, probe_groups=%s, base_url=%s",
+		params.ModelProvider, params.ModelName, strings.Join(probes, ","), params.BaseURL)
+gologger.Infof("******************");
+
 	return argv
 }
 
@@ -480,14 +621,17 @@ func buildGarakResult(scanID string, output *garakpkg.AdapterOutput, findings []
 	for _, f := range findings {
 		bySeverity[string(f.Severity)]++
 	}
+	total := len(findings)
 
 	return map[string]interface{}{
-		"scan_id":        scanID,
-		"total":          len(findings),
-		"by_severity":    bySeverity,
-		"findings":       findings,
-		"garak_version":  output.GarakVersion,
+		"scan_id":         scanID,
+		"total":           total,
+		"summary":         map[string]interface{}{"total_findings": total, "total": total},
+		"by_severity":     bySeverity,
+		"findings":        findings,
+		"results":         findings,
+		"garak_version":   output.GarakVersion,
 		"adapter_version": output.AdapterVersion,
-		"metadata":       output.Metadata,
+		"metadata":        output.Metadata,
 	}
 }
