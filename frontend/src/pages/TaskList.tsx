@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import {
   Button,
   Card,
@@ -10,25 +11,35 @@ import {
   Tag,
   message,
 } from 'antd';
-import { ReloadOutlined } from '@ant-design/icons';
+import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
 import PageHeader from '@/components/PageHeader';
 import { deleteTask, listTasks, terminateTask } from '@/api/tasks';
+import { isTaskRunning } from '@/utils/task';
 import type { TaskListItem } from '@/types/task';
 
-// Tasks supported by the backend (see common/websocket/task.go).
+// Task types — both shapes are accepted by the backend filter:
+// in-app tasks store PascalCase-with-dashes (AI-Infra-Scan), while the
+// third-party taskapi/* endpoint stores lowercase_underscored values.
 const TASK_TYPE_OPTIONS = [
   { value: '', label: '全部类型' },
-  { value: 'ai_infra_scan', label: 'AI Infra Scan' },
-  { value: 'mcp_scan', label: 'MCP Scan' },
-  { value: 'agent_scan', label: 'Agent Scan' },
-  { value: 'model_redteam_report', label: 'Model Redteam' },
-  { value: 'garak_scan', label: 'Garak Scan' },
+  { value: 'AI-Infra-Scan', label: 'AI Infra Scan (in-app)' },
+  { value: 'Mcp-Scan', label: 'MCP Scan (in-app)' },
+  { value: 'Agent-Scan', label: 'Agent Scan (in-app)' },
+  { value: 'Model-Redteam-Report', label: 'Model Redteam (in-app)' },
+  { value: 'Garak-Scan', label: 'Garak Scan (in-app)' },
+  { value: 'ai_infra_scan', label: 'AI Infra Scan (taskapi)' },
+  { value: 'mcp_scan', label: 'MCP Scan (taskapi)' },
+  { value: 'agent_scan', label: 'Agent Scan (taskapi)' },
+  { value: 'model_redteam_report', label: 'Model Redteam (taskapi)' },
+  { value: 'garak_scan', label: 'Garak Scan (taskapi)' },
 ];
 
 const STATUS_COLORS: Record<string, string> = {
   pending: 'default',
+  todo: 'default',
+  doing: 'processing',
   running: 'processing',
   completed: 'success',
   failed: 'error',
@@ -42,6 +53,7 @@ function formatTime(value: unknown): string {
 }
 
 export default function TaskList() {
+  const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<TaskListItem[]>([]);
   const [keyword, setKeyword] = useState('');
@@ -86,6 +98,19 @@ export default function TaskList() {
   const columns = useMemo<ColumnsType<TaskListItem>>(
     () => [
       {
+        title: '任务',
+        dataIndex: 'title',
+        key: 'title',
+        ellipsis: true,
+        render: (v: string | undefined, item) => (
+          <Link to={`/tasks/${encodeURIComponent(item.sessionId)}`}>
+            {v || item.rawTitle || (
+              <span style={{ color: '#999' }}>(未命名)</span>
+            )}
+          </Link>
+        ),
+      },
+      {
         title: '会话 ID',
         dataIndex: 'sessionId',
         key: 'sessionId',
@@ -94,17 +119,10 @@ export default function TaskList() {
         render: (v: string) => <code>{v}</code>,
       },
       {
-        title: '名称',
-        dataIndex: 'taskName',
-        key: 'taskName',
-        ellipsis: true,
-        render: (v?: string) => v || <span style={{ color: '#999' }}>(未命名)</span>,
-      },
-      {
         title: '类型',
         dataIndex: 'taskType',
         key: 'taskType',
-        width: 160,
+        width: 180,
         render: (v: string) => <Tag>{v}</Tag>,
       },
       {
@@ -126,11 +144,20 @@ export default function TaskList() {
       {
         title: '操作',
         key: 'actions',
-        width: 200,
+        width: 220,
         render: (_v, item) => (
           <Space size="small">
+            <Link to={`/tasks/${encodeURIComponent(item.sessionId)}`}>
+              <Button size="small" type="link">
+                详情
+              </Button>
+            </Link>
             <Popconfirm title="确认终止该任务?" onConfirm={() => onTerminate(item)}>
-              <Button size="small" type="link" disabled={item.status !== 'running'}>
+              <Button
+                size="small"
+                type="link"
+                disabled={!isTaskRunning(item.status)}
+              >
                 终止
               </Button>
             </Popconfirm>
@@ -152,9 +179,18 @@ export default function TaskList() {
         title="任务列表"
         description="按用户身份查询所有扫描任务，支持关键字搜索与按任务类型过滤。"
         extra={
-          <Button icon={<ReloadOutlined />} onClick={fetchData} loading={loading}>
-            刷新
-          </Button>
+          <Space>
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={() => navigate('/tasks/new')}
+            >
+              新建任务
+            </Button>
+            <Button icon={<ReloadOutlined />} onClick={fetchData} loading={loading}>
+              刷新
+            </Button>
+          </Space>
         }
       />
       <Space style={{ marginBottom: 16 }} wrap>
@@ -168,7 +204,7 @@ export default function TaskList() {
           onSearch={() => fetchData()}
         />
         <Select
-          style={{ width: 180 }}
+          style={{ width: 220 }}
           value={taskType}
           options={TASK_TYPE_OPTIONS}
           onChange={(v) => setTaskType(v)}

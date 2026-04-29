@@ -1,6 +1,9 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 import AppLayout from '@/components/AppLayout';
 import TaskList from '@/pages/TaskList';
+import TaskCreate from '@/pages/TaskCreate';
+import TaskDetail from '@/pages/TaskDetail';
+import Findings from '@/pages/Findings';
 import Fingerprints from '@/pages/Fingerprints';
 import Placeholder from '@/pages/Placeholder';
 import About from '@/pages/About';
@@ -11,6 +14,9 @@ export default function App() {
       <Route path="/" element={<AppLayout />}>
         <Route index element={<Navigate to="/tasks" replace />} />
         <Route path="tasks" element={<TaskList />} />
+        <Route path="tasks/new" element={<TaskCreate />} />
+        <Route path="tasks/:sessionId" element={<TaskDetail />} />
+        <Route path="scans/:scanId/findings" element={<Findings />} />
         <Route path="knowledge">
           <Route path="fingerprints" element={<Fingerprints />} />
           <Route
@@ -50,3 +56,4 @@ export default function App() {
     </Routes>
   );
 }
+
