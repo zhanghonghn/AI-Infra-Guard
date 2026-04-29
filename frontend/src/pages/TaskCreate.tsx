@@ -270,7 +270,7 @@ export default function TaskCreate() {
   const [uploadedUrl, setUploadedUrl] = useState<string | null>(null);
   // Garak-Scan: whether to use a system-configured model instead of manual creds.
   const [garakUseSystemModel, setGarakUseSystemModel] = useState<boolean>(
-    () => !!(cloneRef.current?.params as Record<string, unknown> | undefined)?.model_id,
+    () => !!(cloneRef.current?.params as Record<string, unknown>)?.model_id,
   );
   // Live-parsed AI-Infra-Scan target preview.
   const [targetPreview, setTargetPreview] = useState<{

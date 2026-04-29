@@ -1483,7 +1483,10 @@ function GarakScanResult({
       })
       .catch(() => undefined)
       .finally(() => setFindingsLoading(false));
-  }, [scanIdField]);  // eslint-disable-line react-hooks/exhaustive-deps
+    // `findings` is intentionally omitted: we only want to trigger a fetch when
+    // scanIdField changes, not when findings changes (that would cause a loop).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scanIdField]);
 
   const filteredFindings = useMemo<Finding[]>(() => {
     return findings.filter((f) => {
