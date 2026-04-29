@@ -126,6 +126,57 @@ func TestHydrateGarakParams_KeepExplicitValues(t *testing.T) {
 	}
 }
 
+func TestHydrateGarakParams_FromStringModel(t *testing.T) {
+	// Frontend manual mode sends provider/model as string fields.
+	raw := map[string]interface{}{
+		"provider": "openai",
+		"model":    "gpt-4o",
+		"api_key":  "sk-test",
+		"base_url": "https://api.openai.com/v1",
+	}
+	b, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("marshal raw params failed: %v", err)
+	}
+
+	params := &GarakScanParams{
+		APIKey:  "sk-test",
+		BaseURL: "https://api.openai.com/v1",
+	}
+	hydrateGarakParams(b, params)
+
+	if params.ModelName != "gpt-4o" {
+		t.Errorf("expected ModelName=gpt-4o, got %q", params.ModelName)
+	}
+	if params.ModelProvider != "openai" {
+		t.Errorf("expected ModelProvider=openai, got %q", params.ModelProvider)
+	}
+}
+
+func TestHydrateGarakParams_ProviderFallback(t *testing.T) {
+	// When provider is absent, infer from base_url.
+	raw := map[string]interface{}{
+		"model":    "llama3",
+		"base_url": "http://127.0.0.1:11434/v1",
+	}
+	b, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("marshal raw params failed: %v", err)
+	}
+
+	params := &GarakScanParams{
+		BaseURL: "http://127.0.0.1:11434/v1",
+	}
+	hydrateGarakParams(b, params)
+
+	if params.ModelName != "llama3" {
+		t.Errorf("expected ModelName=llama3, got %q", params.ModelName)
+	}
+	if params.ModelProvider != "ollama" {
+		t.Errorf("expected ModelProvider=ollama (inferred), got %q", params.ModelProvider)
+	}
+}
+
 func TestInferModelProvider(t *testing.T) {
 	cases := []struct {
 		name    string

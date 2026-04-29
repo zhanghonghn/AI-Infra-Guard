@@ -13,6 +13,7 @@ import {
   Select,
   Space,
   Spin,
+  Switch,
   Tag,
   Typography,
   Upload,
@@ -227,6 +228,8 @@ function buildInitialValues(
     }
     case 'Garak-Scan':
       return {
+        useSystemModel: !!(params.model_id as string),
+        system_model_id: (params.model_id as string) || undefined,
         provider: (params.provider as string) || 'openai',
         model: (params.model as string) || clone?.content || '',
         api_key: params.api_key,
@@ -265,6 +268,10 @@ export default function TaskCreate() {
   const [submitting, setSubmitting] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [uploadedUrl, setUploadedUrl] = useState<string | null>(null);
+  // Garak-Scan: whether to use a system-configured model instead of manual creds.
+  const [garakUseSystemModel, setGarakUseSystemModel] = useState<boolean>(
+    () => !!(cloneRef.current?.params as Record<string, unknown> | undefined)?.model_id,
+  );
   // Live-parsed AI-Infra-Scan target preview.
   const [targetPreview, setTargetPreview] = useState<{
     valid: string[];
@@ -316,6 +323,12 @@ export default function TaskCreate() {
       setUploadedUrl(clone.attachments[0].fileUrl);
     } else {
       setUploadedUrl(null);
+    }
+    // Sync Garak system model toggle from initial values.
+    if (taskType === 'Garak-Scan') {
+      setGarakUseSystemModel(!!(initial.useSystemModel));
+    } else {
+      setGarakUseSystemModel(false);
     }
     if (useClone) {
       cloneAppliedRef.current = true;
@@ -469,13 +482,20 @@ export default function TaskCreate() {
       }
       case 'Garak-Scan': {
         base.content = (values.model as string) || '';
-        base.params = {
-          provider: values.provider,
-          model: values.model,
-          api_key: values.api_key,
-          base_url: values.base_url,
-          intensity: values.intensity || 'fast',
-        };
+        if (garakUseSystemModel && values.system_model_id) {
+          base.params = {
+            model_id: values.system_model_id,
+            intensity: values.intensity || 'fast',
+          };
+        } else {
+          base.params = {
+            provider: values.provider,
+            model: values.model,
+            api_key: values.api_key,
+            base_url: values.base_url,
+            intensity: values.intensity || 'fast',
+          };
+        }
         break;
       }
     }
@@ -730,27 +750,68 @@ export default function TaskCreate() {
       case 'Garak-Scan':
         return (
           <>
-            <Form.Item
-              name="provider"
-              label="Provider"
-              rules={[{ required: true }]}
-              initialValue="openai"
-            >
-              <Select options={GARAK_PROVIDERS} />
+            <Form.Item label="使用系统配置模型">
+              <Space size={8}>
+                <Switch
+                  checked={garakUseSystemModel}
+                  onChange={(v) => {
+                    setGarakUseSystemModel(v);
+                    // Reset related fields when toggling mode.
+                    form.setFieldsValue({
+                      system_model_id: undefined,
+                      provider: 'openai',
+                      model: '',
+                      api_key: '',
+                      base_url: '',
+                    });
+                  }}
+                />
+                <Typography.Text type="secondary">
+                  {garakUseSystemModel
+                    ? '将从系统模型配置中读取凭证，无需手动填写 API Key'
+                    : '手动填写模型名称与 API Key'}
+                </Typography.Text>
+              </Space>
             </Form.Item>
-            <Form.Item
-              name="model"
-              label="模型名"
-              rules={[{ required: true, message: '请填写模型名' }]}
-            >
-              <Input placeholder="例如 gpt-4o" />
-            </Form.Item>
-            <Form.Item name="api_key" label="API Key">
-              <Input.Password autoComplete="new-password" />
-            </Form.Item>
-            <Form.Item name="base_url" label="Base URL(可选)">
-              <Input placeholder="https://api.openai.com/v1" />
-            </Form.Item>
+            {garakUseSystemModel ? (
+              <Form.Item
+                name="system_model_id"
+                label="系统配置模型"
+                rules={[{ required: true, message: '请选择一个系统配置模型' }]}
+              >
+                <Select
+                  showSearch
+                  optionFilterProp="label"
+                  loading={modelsLoading}
+                  options={modelOptions}
+                  placeholder="选择已配置的模型"
+                />
+              </Form.Item>
+            ) : (
+              <>
+                <Form.Item
+                  name="provider"
+                  label="Provider"
+                  rules={[{ required: true }]}
+                  initialValue="openai"
+                >
+                  <Select options={GARAK_PROVIDERS} />
+                </Form.Item>
+                <Form.Item
+                  name="model"
+                  label="模型名"
+                  rules={[{ required: true, message: '请填写模型名' }]}
+                >
+                  <Input placeholder="例如 gpt-4o" />
+                </Form.Item>
+                <Form.Item name="api_key" label="API Key">
+                  <Input.Password autoComplete="new-password" />
+                </Form.Item>
+                <Form.Item name="base_url" label="Base URL(可选)">
+                  <Input placeholder="https://api.openai.com/v1" />
+                </Form.Item>
+              </>
+            )}
             <Form.Item name="intensity" label="扫描强度" initialValue="fast">
               <Select options={INTENSITY_OPTIONS} />
             </Form.Item>

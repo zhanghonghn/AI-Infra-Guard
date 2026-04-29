@@ -256,6 +256,7 @@ func (g *GarakTask) Execute(ctx context.Context, request TaskRequest, callbacks 
 
 // hydrateGarakParams 兼容来自 task_manager 的模型参数结构：
 // params 里可能只有 model_id，但服务端会额外注入 model 对象（{model,token,base_url,...}）。
+// 同时兼容前端直接传入 provider/model 字符串的旧格式。
 // Garak 适配器需要 model_provider/model_name/api_key/base_url，故在此补全。
 func hydrateGarakParams(raw json.RawMessage, params *GarakScanParams) {
 	if params == nil || len(raw) == 0 {
@@ -273,6 +274,7 @@ func hydrateGarakParams(raw json.RawMessage, params *GarakScanParams) {
 	modelRaw, ok := m["model"]
 	if ok {
 		if modelMap, ok := modelRaw.(map[string]interface{}); ok {
+			// model 字段为对象（由 task_manager 注入的系统模型配置）
 			if strings.TrimSpace(params.ModelName) == "" {
 				params.ModelName = firstNonEmptyString(modelMap, "model", "model_name", "name")
 			}
@@ -282,6 +284,18 @@ func hydrateGarakParams(raw json.RawMessage, params *GarakScanParams) {
 			if strings.TrimSpace(params.BaseURL) == "" {
 				params.BaseURL = firstNonEmptyString(modelMap, "base_url", "baseUrl", "endpoint")
 			}
+		} else if modelStr, ok := modelRaw.(string); ok && strings.TrimSpace(modelStr) != "" {
+			// model 字段为字符串（前端手动填写模式）
+			if strings.TrimSpace(params.ModelName) == "" {
+				params.ModelName = strings.TrimSpace(modelStr)
+			}
+		}
+	}
+
+	// 兼容前端发送 provider 字段（旧格式），对应 ModelProvider
+	if strings.TrimSpace(params.ModelProvider) == "" {
+		if providerStr, ok := m["provider"].(string); ok && strings.TrimSpace(providerStr) != "" {
+			params.ModelProvider = strings.TrimSpace(providerStr)
 		}
 	}
 
