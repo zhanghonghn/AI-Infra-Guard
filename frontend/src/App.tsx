@@ -1,4 +1,4 @@
-import { Navigate, Route, Routes } from 'react-router-dom';
+import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import AppLayout from '@/components/AppLayout';
 import TaskList from '@/pages/TaskList';
 import TaskCreate from '@/pages/TaskCreate';
@@ -12,11 +12,29 @@ import About from '@/pages/About';
 import SystemModels from '@/pages/system/Models';
 import SystemDataUpdate from '@/pages/system/DataUpdate';
 import SystemInfo from '@/pages/system/SystemInfo';
+import Login from '@/pages/Login';
+import { isLoggedIn } from '@/utils/auth';
+
+function RequireAuth({ children }: { children: JSX.Element }) {
+  const location = useLocation();
+  if (!isLoggedIn()) {
+    return <Navigate to="/login" replace state={{ from: location }} />;
+  }
+  return children;
+}
 
 export default function App() {
   return (
     <Routes>
-      <Route path="/" element={<AppLayout />}>
+      <Route path="/login" element={<Login />} />
+      <Route
+        path="/"
+        element={
+          <RequireAuth>
+            <AppLayout />
+          </RequireAuth>
+        }
+      >
         <Route index element={<Navigate to="/tasks" replace />} />
         <Route path="tasks" element={<TaskList />} />
         <Route path="tasks/new" element={<TaskCreate />} />
@@ -34,13 +52,12 @@ export default function App() {
           <Route path="data-update" element={<SystemDataUpdate />} />
           <Route path="info" element={<SystemInfo />} />
         </Route>
-        {/* Backwards-compatible alias for the old top-level entry. */}
         <Route path="models" element={<Navigate to="/system/models" replace />} />
         <Route path="about" element={<About />} />
         <Route path="*" element={<Navigate to="/tasks" replace />} />
       </Route>
+      <Route path="*" element={<Navigate to="/tasks" replace />} />
     </Routes>
   );
 }
-
 

@@ -1,6 +1,7 @@
 import axios, { AxiosError, AxiosInstance, AxiosRequestConfig } from 'axios';
 import { message } from 'antd';
 import type { ApiResponse } from '@/types/api';
+import { getCurrentUsername } from '@/utils/auth';
 
 /**
  * Shared axios instance.
@@ -18,7 +19,7 @@ const instance: AxiosInstance = axios.create({
 
 // Inject the lightweight identity header expected by setupIdentityMiddleware.
 instance.interceptors.request.use((config) => {
-  const username = localStorage.getItem('aig.username') || 'public_user';
+  const username = getCurrentUsername() || 'public_user';
   config.headers = config.headers ?? {};
   // axios v1 supports plain assignment for both AxiosHeaders and plain objects.
   (config.headers as Record<string, string>).username = username;

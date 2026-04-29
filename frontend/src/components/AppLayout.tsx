@@ -1,19 +1,22 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Layout, Menu, theme, Typography } from 'antd';
+import { Button, Layout, Menu, Space, theme, Typography, message } from 'antd';
 import {
   AppstoreOutlined,
   BookOutlined,
   CloudDownloadOutlined,
   ExperimentOutlined,
   InfoCircleOutlined,
+  LogoutOutlined,
   RobotOutlined,
   SafetyCertificateOutlined,
   SettingOutlined,
   UnorderedListOutlined,
+  UserOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
-import { Link, Outlet, useLocation } from 'react-router-dom';
+import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { getVersion } from '@/api/version';
+import { getCurrentUsername, logout } from '@/utils/auth';
 
 const { Header, Sider, Content } = Layout;
 
@@ -93,6 +96,7 @@ const ALL_KEYS = flattenKeys(NAV_ITEMS);
 
 export default function AppLayout() {
   const location = useLocation();
+  const navigate = useNavigate();
   const { token } = theme.useToken();
   const [version, setVersion] = useState<string>('');
 
@@ -117,6 +121,13 @@ export default function AppLayout() {
     () => (selectedKey.startsWith('/system/') ? ['system'] : []),
     [selectedKey],
   );
+  const username = getCurrentUsername() || 'public_user';
+
+  const handleLogout = () => {
+    logout();
+    message.success('已退出登录');
+    navigate('/login', { replace: true });
+  };
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
@@ -162,9 +173,22 @@ export default function AppLayout() {
           <Typography.Title level={4} style={{ margin: 0 }}>
             AI Infrastructure Guard
           </Typography.Title>
-          <Typography.Text type="secondary">
-            {version ? `v${version}` : ''}
-          </Typography.Text>
+          <Space size={16}>
+            <Typography.Text type="secondary">
+              {version ? `v${version}` : ''}
+            </Typography.Text>
+            <Typography.Text>
+              <UserOutlined /> {username}
+            </Typography.Text>
+            <Button
+              icon={<LogoutOutlined />}
+              onClick={handleLogout}
+              type="default"
+              size="small"
+            >
+              退出登录
+            </Button>
+          </Space>
         </Header>
         <Content style={{ padding: 24, background: token.colorBgLayout }}>
           <Outlet />
@@ -173,4 +197,3 @@ export default function AppLayout() {
     </Layout>
   );
 }
-
