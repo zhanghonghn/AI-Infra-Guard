@@ -2,6 +2,11 @@
 # 第一阶段：构建Go应用
 FROM golang:1.23.2-alpine AS builder
 
+ARG GOPROXY=https://goproxy.cn,direct
+ARG GOSUMDB=sum.golang.google.cn
+ENV GOPROXY=${GOPROXY}
+ENV GOSUMDB=${GOSUMDB}
+
 # 设置工作目录
 WORKDIR /app
 
@@ -19,6 +24,12 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -trimpath -buildvcs=false
 
 # 第二阶段：运行阶段（使用Python 3.12 Alpine镜像）
 FROM python:3.12-alpine
+
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+ENV PIP_INDEX_URL=${PIP_INDEX_URL}
+ENV PIP_DEFAULT_TIMEOUT=180
+ENV PIP_RETRIES=10
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 
 # 安装运行时依赖
 RUN apk add --no-cache \
@@ -43,7 +54,7 @@ COPY --from=builder /app/data ./data
 
 # 复制agent-scan目录并安装Python依赖
 COPY ./agent-scan /app/agent-scan
-RUN pip install --no-cache-dir -r /app/agent-scan/requirements.txt
+RUN pip install --no-cache-dir --prefer-binary -r /app/agent-scan/requirements.txt
 
 # 复制启动脚本到镜像中
 COPY start.sh /app/start.sh

@@ -20,6 +20,7 @@ package database
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -34,12 +35,13 @@ const (
 
 // User 用户表（扩展版本）
 type User struct {
-	UserID     string `gorm:"primaryKey;column:user_id" json:"user_id"`
-	Username   string `gorm:"column:username;not null;uniqueIndex" json:"username"`        // 用户名（唯一）
-	Email      string `gorm:"column:email;not null;uniqueIndex" json:"email"`              // 邮箱（唯一）
-	IsActive   bool   `gorm:"column:is_active;not null;default:true" json:"is_active"`     // 是否激活
-	FirstLogin bool   `gorm:"column:first_login;not null;default:true" json:"first_login"` // 是否首次登录，默认true
-	CreatedAt  int64  `gorm:"column:created_at;not null" json:"created_at"`                // 创建时间
+	UserID       string `gorm:"primaryKey;column:user_id" json:"user_id"`
+	Username     string `gorm:"column:username;not null;uniqueIndex" json:"username"`        // 用户名（唯一）
+	Email        string `gorm:"column:email;not null;uniqueIndex" json:"email"`              // 邮箱（唯一）
+	PasswordHash string `gorm:"column:password_hash;not null;default:''" json:"-"`           // 密码哈希
+	IsActive     bool   `gorm:"column:is_active;not null;default:true" json:"is_active"`     // 是否激活
+	FirstLogin   bool   `gorm:"column:first_login;not null;default:true" json:"first_login"` // 是否首次登录，默认true
+	CreatedAt    int64  `gorm:"column:created_at;not null" json:"created_at"`                // 创建时间
 }
 
 // Session 会话表（一个会话对应一个任务）
@@ -129,6 +131,38 @@ func (s *TaskStore) CreateUser(user *User) error {
 	now := time.Now().UnixMilli()
 	user.CreatedAt = now
 	return s.db.Create(user).Error
+}
+
+// EnsureUser 确保用户存在；若用户已存在则按需补全关键字段
+func (s *TaskStore) EnsureUser(user *User) error {
+	if user == nil {
+		return fmt.Errorf("user is nil")
+	}
+
+	existing, err := s.GetUser(user.Username)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return s.CreateUser(user)
+		}
+		return err
+	}
+
+	updates := map[string]interface{}{}
+	if existing.Email == "" && user.Email != "" {
+		updates["email"] = user.Email
+	}
+	if user.PasswordHash != "" && existing.PasswordHash == "" {
+		updates["password_hash"] = user.PasswordHash
+	}
+	if !existing.IsActive {
+		updates["is_active"] = true
+	}
+
+	if len(updates) == 0 {
+		return nil
+	}
+
+	return s.db.Model(&User{}).Where("username = ?", user.Username).Updates(updates).Error
 }
 
 // GetUser 获取用户信息

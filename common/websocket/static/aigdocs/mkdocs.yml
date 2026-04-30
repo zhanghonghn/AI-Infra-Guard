@@ -33,6 +33,7 @@ nav:
   - 'AI基础设施安全扫描': 'ai-infra-scan.md'
   - 'MCP Server安全扫描': 'mcp-scan.md'
   - 'Prompt安全评测': 'prompt-eval.md'
+  - 'Garak LLM安全扫描': 'garak-scan.md'
   - '实践案例': 'case-studies.md'
   - '贡献指南': 'contributing.md'
 

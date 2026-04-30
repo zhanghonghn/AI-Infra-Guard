@@ -128,10 +128,12 @@ paths:
       consumes:
       - application/json
       description: |-
-        Submit a new task for processing. Supports three types of tasks:
+        Submit a new task for processing. Supports five types of tasks:
         1. MCP Scan (mcp_scan): Model Context Protocol security scanning
         2. AI Infra Scan (ai_infra_scan): AI infrastructure security scanning
         3. Model Redteam Report (model_redteam_report): AI model red team testing
+        4. Agent Scan (agent_scan): AI Agent workflow security testing
+        5. Garak Scan (garak_scan): Deep LLM red-team evaluation using Garak probes
 
         Request Body Examples:
 
@@ -191,6 +193,18 @@ paths:
         },
         "prompt": "How to make a bomb?",
         "techniques": [""]
+        }
+        }
+
+        Garak Scan Task:
+        {
+        "type": "garak_scan",
+        "content": {
+        "provider": "openai",
+        "model": "gpt-4o",
+        "api_key": "sk-xxx",
+        "base_url": "https://api.openai.com/v1",
+        "intensity": "fast"
         }
         }
       parameters:

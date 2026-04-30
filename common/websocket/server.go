@@ -32,6 +32,7 @@ import (
 
 	"github.com/Tencent/AI-Infra-Guard/common/trpc"
 	_ "github.com/Tencent/AI-Infra-Guard/docs"
+	"github.com/Tencent/AI-Infra-Guard/internal/gologger"
 	version "github.com/Tencent/AI-Infra-Guard/internal/options"
 	"github.com/Tencent/AI-Infra-Guard/pkg/database"
 	"github.com/gin-gonic/gin"
@@ -44,10 +45,17 @@ import (
 var staticFS embed.FS
 
 func RunWebServer(options *version.Options) {
+	if cwd, err := os.Getwd(); err == nil {
+		gologger.Infof("启动Web服务: addr=%s, cwd=%s", options.WebServerAddr, cwd)
+	} else {
+		gologger.Infof("启动Web服务: addr=%s", options.WebServerAddr)
+	}
+
 	// 1. 初始化trpc-go
 	if err := trpc.InitTrpc("./trpc_go.yaml"); err != nil {
-		log.Fatalf("Trpc-go初始化失败: %v", err)
+		gologger.Fatalf("Trpc-go初始化失败: %v。请确认当前目录存在 trpc_go.yaml，或从项目根目录启动。", err)
 	}
+	gologger.Infoln("Trpc-go 初始化成功")
 	log.Infof("Trpc-go initialized successfully: trace_id=system_startup")
 
 	r := gin.Default()
@@ -68,6 +76,10 @@ func RunWebServer(options *version.Options) {
 		log.Errorf("初始化tasks表失败: trace_id=system_startup, error=%v", err)
 		log.Fatalf("初始化tasks表失败: %v", err)
 	}
+	if err := ensureDefaultAdminUser(taskStore); err != nil {
+		log.Errorf("初始化默认admin用户失败: trace_id=system_startup, error=%v", err)
+		log.Fatalf("初始化默认admin用户失败: %v", err)
+	}
 
 	// 初始化模型存储
 	modelStore := database.NewModelStore(db)
@@ -77,6 +89,14 @@ func RunWebServer(options *version.Options) {
 	}
 	// 自动添加模型
 	modelStore.AutoAddModels()
+
+	// 初始化 Finding 存储（FR-3 / FR-6 持久化层）
+	findingStore := database.NewFindingStore(db)
+	if err := findingStore.Init(); err != nil {
+		log.Errorf("初始化findings表失败: trace_id=system_startup, error=%v", err)
+	}
+	// 启动 Finding 数据保留清理任务（FR-3：默认 90 天）
+	StartFindingRetentionJob(findingStore)
 
 	// 初始化AgentManager
 	agentManager := NewAgentManager()
@@ -97,6 +117,7 @@ func RunWebServer(options *version.Options) {
 	sseManager := NewSSEManager()
 
 	taskManager := NewTaskManager(agentManager, taskStore, modelStore, fileConfig, sseManager)
+	taskManager.SetFindingStore(findingStore)
 	err = taskManager.taskStore.ResetRunningTasks()
 	if err != nil {
 		log.Fatalf("重置运行中的任务失败: %v", err)
@@ -108,6 +129,12 @@ func RunWebServer(options *version.Options) {
 	// API 版本分组
 	v1 := r.Group("/api/v1")
 	{
+		auth := v1.Group("/auth")
+		{
+			auth.POST("/login", handleLogin(taskStore))
+			auth.GET("/me", setupIdentityMiddleware(), handleMe())
+		}
+
 		v1.GET("/images/:path", func(context *gin.Context) {
 			path := context.Param("path")
 			if strings.Contains(path, "..") {
@@ -233,6 +260,31 @@ func RunWebServer(options *version.Options) {
 					HandleTerminateTask(c, taskManager)
 				})
 			}
+			// Garak Findings 模块（FR-3 / FR-5 / FR-6）
+			findingsGroup := appSecurity.Group("/findings")
+			{
+				findingsGroup.GET("/:scanId", func(c *gin.Context) {
+					HandleListFindings(c, taskManager)
+				})
+				findingsGroup.GET("/:scanId/export", func(c *gin.Context) {
+					HandleExportFindings(c, taskManager)
+				})
+				findingsGroup.PUT("/status/:findingId", func(c *gin.Context) {
+					HandleUpdateFindingStatus(c, taskManager)
+				})
+			}
+			scansGroup := appSecurity.Group("/scans")
+			{
+				scansGroup.GET("/compare", func(c *gin.Context) {
+					HandleCompareScans(c, taskManager)
+				})
+				scansGroup.GET("/:scanId/retest_history", func(c *gin.Context) {
+					HandleListBaselines(c, taskManager)
+				})
+				scansGroup.POST("/:scanId/retest", func(c *gin.Context) {
+					HandleRetestScan(c, taskManager)
+				})
+			}
 			// 模型管理
 			models := appSecurity.Group("/models")
 			{
@@ -350,23 +402,9 @@ func RunWebServer(options *version.Options) {
 	})
 
 	log.Infof("Starting WebServer: trace_id=system_startup, addr=%s", options.WebServerAddr)
+	gologger.Infof("Web服务开始监听: %s", options.WebServerAddr)
 	if err := r.Run(options.WebServerAddr); err != nil {
 		log.Errorf("Could not start WebSocket server: trace_id=system_startup, error=%s", err)
-	}
-}
-
-// 配置身份认证中间件
-func setupIdentityMiddleware() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		// 优先从请求头获取username字段
-		username := c.GetHeader("username")
-
-		// 如果都没有，使用默认的公共用户
-		if username == "" {
-			username = "public_user"
-		}
-		// 存储到gin上下文
-		c.Set("username", username)
-		c.Next()
+		gologger.Errorf("Web服务启动失败: %v", err)
 	}
 }

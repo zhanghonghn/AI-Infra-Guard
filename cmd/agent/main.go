@@ -22,6 +22,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 
 	"github.com/Tencent/AI-Infra-Guard/common/agent"
 	"github.com/Tencent/AI-Infra-Guard/internal/gologger"
@@ -41,12 +43,22 @@ func main() {
 		gologger.Errorln("server is empty")
 		return
 	}
+	agentID := strings.TrimSpace(os.Getenv("AIG_AGENT_ID"))
+	if agentID == "" {
+		hostname, _ := os.Hostname()
+		hostname = strings.TrimSpace(hostname)
+		if hostname == "" {
+			hostname = "agent"
+		}
+		agentID = fmt.Sprintf("%s-%s", hostname, strconv.Itoa(os.Getpid()))
+	}
 	gologger.Infoln("connect server:", server)
+	gologger.Infoln("agent id:", agentID)
 	serverUrl := fmt.Sprintf("ws://%s/api/v1/agents/ws", server)
 	x := agent.NewAgent(agent.AgentConfig{
 		ServerURL: serverUrl,
 		Info: agent.AgentInfo{
-			ID:       "test_id",
+			ID:       agentID,
 			HostName: "test_hostname",
 			IP:       "127.0.0.1",
 			Version:  "0.1",
@@ -59,11 +71,13 @@ func main() {
 	agent3 := agent.McpTask{Server: server}
 	agent4 := agent.ModelRedteamReport{Server: server}
 	agent5 := agent.AgentTask{Server: server}
+	agent6 := agent.GarakTask{Server: server}
 
 	x.RegisterTaskFunc(&agent2)
 	x.RegisterTaskFunc(&agent3)
 	x.RegisterTaskFunc(&agent4)
 	x.RegisterTaskFunc(&agent5)
+	x.RegisterTaskFunc(&agent6)
 
 	gologger.Infoln("wait task")
 	err := x.Start()

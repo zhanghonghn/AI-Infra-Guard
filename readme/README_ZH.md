@@ -100,6 +100,28 @@ docker-compose -f docker-compose.images.yml up -d
 `http://localhost:8088`
 <br>
 
+### 开发模式（本地源码）
+
+本地开发调试建议在项目根目录使用 `dev.sh`。该脚本会前台启动 Web 服务（日志直接输出到终端），可自动构建缺失二进制，并可按需启动 Agent。
+
+```bash
+# 默认：Web 监听 127.0.0.1:8089，且启动 Agent
+./dev.sh
+
+# 仅启动 Web（不启动 Agent）
+START_AGENT=false ./dev.sh
+
+# 端口被占用时自动尝试清理占用进程
+KILL_OLD=true ./dev.sh
+
+# 自定义监听地址/端口
+WEB_SERVER_ADDR=127.0.0.1:8090 ./dev.sh
+```
+
+开发模式默认访问地址：
+`http://127.0.0.1:8089`
+<br>
+
 ### 在 OpenClaw 中使用
 
 你也可以通过 OpenClaw 的 `aig-scanner` skill 直接调用 A.I.G 服务。

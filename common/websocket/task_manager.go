@@ -60,6 +60,7 @@ type TaskManager struct {
 	agentManager *AgentManager                 // 新增：引用 AgentManager
 	taskStore    *database.TaskStore           // 新增：引用 TaskStore
 	modelStore   *database.ModelStore          // 新增：引用 ModelStore
+	findingStore *database.FindingStore        // 新增：引用 FindingStore（Garak 结果落库 + 复测/对比）
 	fileConfig   *FileUploadConfig             // 新增：文件上传配置
 	sseManager   *SSEManager                   // 新增：SSE管理器
 }
@@ -79,6 +80,23 @@ func NewTaskManager(agentManager *AgentManager, taskStore *database.TaskStore, m
 		fileConfig:   fileConfig,   // 注入文件上传配置
 		sseManager:   sseManager,   // 注入SSE管理器
 	}
+}
+
+// SetFindingStore 注入 FindingStore（在 server 启动时调用）
+//
+// 之所以单独提供 setter 而不是构造函数参数，是为了向后兼容已有的
+// NewTaskManager 调用方（包括测试/外部代码），避免破坏现有接口。
+func (tm *TaskManager) SetFindingStore(fs *database.FindingStore) {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	tm.findingStore = fs
+}
+
+// GetFindingStore 返回已注入的 FindingStore（HTTP handler 使用）
+func (tm *TaskManager) GetFindingStore() *database.FindingStore {
+	tm.mu.RLock()
+	defer tm.mu.RUnlock()
+	return tm.findingStore
 }
 
 // 添加任务
@@ -469,7 +487,7 @@ func (tm *TaskManager) HandleAgentEvent(sessionId string, eventType string, even
 		}
 	case "resultUpdate":
 		if convertedEvent, err := convertToStruct(event, &ResultUpdateEvent{}); err == nil {
-			if _, ok := convertedEvent.(*ResultUpdateEvent); ok {
+			if resultEvent, ok := convertedEvent.(*ResultUpdateEvent); ok {
 				log.Infof("任务完成: sessionId=%s", sessionId)
 
 				// 监控相关代码已移除
@@ -481,6 +499,10 @@ func (tm *TaskManager) HandleAgentEvent(sessionId string, eventType string, even
 				} else {
 					log.Infof("任务状态已更新为已完成: sessionId=%s", sessionId)
 				}
+
+				// Garak 任务结果落库（FR-3 / FR-6 基础设施）
+				tm.persistGarakFindings(sessionId, resultEvent)
+
 				// 任务完成，可以清理资源
 				go tm.cleanupTask(sessionId)
 			}
@@ -488,6 +510,65 @@ func (tm *TaskManager) HandleAgentEvent(sessionId string, eventType string, even
 	default:
 		log.Debugf("未知事件类型: sessionId=%s, eventType=%s", sessionId, eventType)
 	}
+}
+
+// persistGarakFindings 当任务为 Garak-Scan 类型时，将 result.findings 落库到
+// findings 表。当 FindingStore 未注入或会话非 Garak 任务时，本函数静默返回。
+//
+// 与 PRD §6 FR-3（Finding 存储）/ FR-6（基线对比）配套。
+func (tm *TaskManager) persistGarakFindings(sessionId string, resultEvent *ResultUpdateEvent) {
+	fs := tm.GetFindingStore()
+	if fs == nil || resultEvent == nil || resultEvent.Result == nil {
+		return
+	}
+
+	session, err := tm.taskStore.GetSession(sessionId)
+	if err != nil {
+		log.Warnf("查询会话失败，跳过 Finding 持久化: sessionId=%s, error=%v", sessionId, err)
+		return
+	}
+	if session.TaskType != agent.TaskTypeGarakScan {
+		return
+	}
+
+	// resultEvent.Result 由 Agent 端 buildGarakResult 构建，
+	// 形如 {"scan_id":..., "findings":[{...}, ...], ...}
+	resultMap, ok := resultEvent.Result.(map[string]interface{})
+	if !ok {
+		log.Warnf("Garak 结果不是 map，跳过持久化: sessionId=%s, type=%T", sessionId, resultEvent.Result)
+		return
+	}
+	rawFindings, ok := resultMap["findings"].([]interface{})
+	if !ok || len(rawFindings) == 0 {
+		log.Infof("Garak 任务无 findings，跳过持久化: sessionId=%s", sessionId)
+		return
+	}
+
+	findings := make([]database.Finding, 0, len(rawFindings))
+	for _, item := range rawFindings {
+		m, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		f, err := database.FindingFromMap(sessionId, m)
+		if err != nil {
+			log.Warnf("Finding 转换失败，跳过: sessionId=%s, error=%v", sessionId, err)
+			continue
+		}
+		// 兜底：如果引擎未生成 finding_id，按 scan_id+probe_id+asset 生成稳定 ID
+		if f.FindingID == "" {
+			f.FindingID = fmt.Sprintf("%s-%s-%s", sessionId, f.GarakProbeID, f.Asset)
+		}
+		findings = append(findings, f)
+	}
+	if len(findings) == 0 {
+		return
+	}
+	if err := fs.SaveFindings(findings); err != nil {
+		log.Errorf("Finding 持久化失败: sessionId=%s, count=%d, error=%v", sessionId, len(findings), err)
+		return
+	}
+	log.Infof("Garak Finding 已落库: sessionId=%s, count=%d", sessionId, len(findings))
 }
 
 // convertToStruct 将 interface{} 转换为指定的结构体类型
@@ -1285,6 +1366,19 @@ func (tm *TaskManager) generateTaskTitle(req *TaskCreateRequest) string {
 		if req.Content != "" {
 			ret += " " + req.Content
 		}
+	case agent.TaskTypeGarakScan:
+		intensity, ok := req.Params["intensity"]
+		if language == "en" {
+			ret = "Garak LLM Security Scan - "
+		} else {
+			ret = "Garak LLM安全扫描 - "
+		}
+		if ok {
+			ret += intensity.(string)
+		}
+		if req.Content != "" {
+			ret += " " + req.Content
+		}
 	default:
 		ret = texts.otherTask + req.Content
 	}
@@ -1429,7 +1523,7 @@ func (tm *TaskManager) GetTaskDetail(sessionId string, username string, traceID 
 		delete(detail, "attachments")
 	}
 
-	log.Infof("获取任务详情成功: trace_id=%s, sessionId=%s, username=%s", traceID, sessionId, username)
+	log.Infof("获取任务详情成功: trace_id=%s, sessionId=%s, username=%s,结果详情=%v", traceID, sessionId, username, detail)
 	return detail, nil
 }
 

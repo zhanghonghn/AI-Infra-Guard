@@ -232,21 +232,16 @@ func HandleTaskSSE(c *gin.Context, tm *TaskManager) {
 		return
 	}
 
-	// 验证任务是否存在
-	_, err := tm.taskStore.GetSession(sessionId)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{
-			"status":  1,
-			"message": "任务不存在",
-			"data":    nil,
-		})
-		return
-	}
-
+	// 注意：此处不校验 session 是否已在 DB 中存在。
+	// `AddTask` 的契约是「客户端先开 SSE，再 POST /tasks；POST 端预存 session
+	// 后会阻塞最多 100s 等待 SSE 连接建立」。如果在这里要求 session 已存在，
+	// 就会与 `AddTask` 的等待逻辑相互死锁，导致前端报「SSE 连接失败」、
+	// 后端日志记录「任务不存在」。SSE 通道由 sessionId（UUID）寻址，
+	// 仍然只对持有正确 sessionId 的客户端可用。
 	username := c.GetString("username")
 
 	// 建立SSE连接
-	err = tm.EstablishSSEConnection(c.Writer, sessionId, username, traceID)
+	err := tm.EstablishSSEConnection(c.Writer, sessionId, username, traceID)
 	if err != nil {
 		log.Errorf("建立SSE连接失败: trace_id=%s, sessionId=%s, username=%s, error=%v", traceID, sessionId, username, err)
 		c.JSON(http.StatusInternalServerError, gin.H{

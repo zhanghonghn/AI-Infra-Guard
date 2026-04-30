@@ -1,0 +1,42 @@
+# 深度扫描策略：发布前评估，全量探针集（约 60-90 分钟）
+name: deep
+description: 全量探针集，适用于发布前完整安全评估
+intensity: deep
+timeout_minutes: 90
+max_concurrency: 2  # Deep 模式并发数较小，避免 LLM API 限流
+
+probe_groups:
+  - name: jailbreak
+    probes:
+      - "dan.Dan_11_0"
+      - "dan.Dan_10_0"
+      - "atkgen.Atkgen"
+      - "gcg.GCG_T_2_23"
+      - "suffix.GCGCached"
+    enabled: true
+
+  - name: prompt_injection
+    probes:
+      - "promptinject.HijackHateHumans"
+      - "promptinject.HijackKillHumans"
+      - "promptinject.HijackLongPrompt"
+    enabled: true
+
+  - name: data_leakage
+    probes:
+      - "leakreplay.LiteratureCloze80"
+      - "leakreplay.LiteratureCloze50"
+    enabled: true
+
+  - name: content_safety
+    probes:
+      - "lmrc.Deadnaming"
+      - "lmrc.Profanity"
+      - "lmrc.SexualContent"
+      - "lmrc.Violence"
+    enabled: true
+
+severity_thresholds:
+  critical: 0.2
+  high: 0.4
+  medium: 0.7

@@ -1,0 +1,1219 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import {
+  Alert,
+  AutoComplete,
+  Button,
+  Card,
+  Form,
+  Input,
+  InputNumber,
+  Progress,
+  Segmented,
+  Select,
+  Space,
+  Spin,
+  Switch,
+  Tag,
+  Typography,
+  Upload,
+  message,
+} from 'antd';
+import { ArrowLeftOutlined, UploadOutlined } from '@ant-design/icons';
+import PageHeader from '@/components/PageHeader';
+import { listModels } from '@/api/models';
+import { uploadTaskFile } from '@/api/files';
+import { createTask, taskSseUrl } from '@/api/tasks';
+import { listAgentNames, listEvaluations } from '@/api/knowledge';
+import type { ModelEntry } from '@/types/model';
+import type {
+  CreateTaskRequest,
+  InAppTaskType,
+  TaskAttachment,
+} from '@/types/task';
+import {
+  genId,
+  TASK_CLONE_STORAGE_KEY,
+  TASK_LANG_STORAGE_KEY,
+} from '@/utils/task';
+
+// --- Task type catalogue ----------------------------------------------------
+
+interface TaskTypeMeta {
+  value: InAppTaskType;
+  label: string;
+  description: string;
+}
+
+const TASK_TYPES: TaskTypeMeta[] = [
+  {
+    value: 'AI-Infra-Scan',
+    label: 'AI 基础设施扫描',
+    description: '指纹识别 + CVE 漏洞扫描，可对一组 URL/IP 进行批量探测。',
+  },
+  {
+    value: 'Mcp-Scan',
+    label: 'MCP 安全扫描',
+    description: '上传源码 zip 或填写远程 MCP 地址，对 MCP Server 做安全扫描。',
+  },
+  {
+    value: 'Agent-Scan',
+    label: 'Agent 安全扫描',
+    description: '对 Dify / Coze / 自研 Agent 做提示注入、越权、数据泄露等检测。',
+  },
+  {
+    value: 'Model-Redteam-Report',
+    label: '大模型安全体检',
+    description: '使用越狱 / 有害内容数据集对 LLM 做红队评估，输出综合报告。',
+  },
+  {
+    value: 'Garak-Scan',
+    label: 'Garak LLM 安全扫描',
+    description: '使用 NVIDIA Garak 探针深度评估，产出可结构化查询的 Findings。',
+  },
+];
+
+// --- Helpers ---------------------------------------------------------------
+
+const INTENSITY_OPTIONS = [
+  { value: 'fast', label: 'Fast (~15min)' },
+  { value: 'standard', label: 'Standard (~45min)' },
+  { value: 'deep', label: 'Deep (~90min)' },
+];
+
+// Garak 支持的模型提供商
+const GARAK_PROVIDERS = [
+  { value: 'openai',                          label: 'OpenAI (API)' },
+  { value: 'azure',                           label: 'Azure OpenAI' },
+  { value: 'huggingface',                     label: 'Hugging Face (本地 Pipeline)' },
+  { value: 'huggingface.InferenceAPI',        label: 'Hugging Face Inference API' },
+  { value: 'huggingface.InferenceEndpoint',   label: 'Hugging Face Private Endpoint' },
+  { value: 'ollama',                          label: 'Ollama (本地)' },
+  { value: 'groq',                            label: 'Groq' },
+  { value: 'cohere',                          label: 'Cohere' },
+  { value: 'nim',                             label: 'NVIDIA NIM' },
+  { value: 'replicate',                       label: 'Replicate' },
+  { value: 'rest.RestGenerator',              label: 'REST (自定义端点)' },
+  { value: 'ggml',                            label: 'ggml / llama.cpp' },
+];
+
+// 每个 provider 下的常用模型名称建议
+const PROVIDER_MODEL_SUGGESTIONS: Record<string, string[]> = {
+  openai: [
+    'gpt-4o',
+    'gpt-4o-mini',
+    'gpt-4-turbo',
+    'gpt-4',
+    'gpt-3.5-turbo',
+    'gpt-3.5-turbo-0125',
+  ],
+  azure: [
+    'gpt-4o',
+    'gpt-4',
+    'gpt-35-turbo',
+  ],
+  'huggingface': [
+    'gpt2',
+    'meta-llama/Llama-2-7b-chat-hf',
+    'mistralai/Mistral-7B-Instruct-v0.2',
+    'google/gemma-7b-it',
+  ],
+  'huggingface.InferenceAPI': [
+    'mosaicml/mpt-7b-instruct',
+    'tiiuae/falcon-7b-instruct',
+    'mistralai/Mixtral-8x7B-Instruct-v0.1',
+  ],
+  'huggingface.InferenceEndpoint': [],
+  ollama: [
+    'llama3',
+    'llama3:8b',
+    'llama3:70b',
+    'mistral',
+    'qwen2:7b',
+    'gemma2:9b',
+    'phi3',
+    'deepseek-r1:7b',
+  ],
+  groq: [
+    'llama3-8b-8192',
+    'llama3-70b-8192',
+    'mixtral-8x7b-32768',
+    'gemma-7b-it',
+  ],
+  cohere: [
+    'command',
+    'command-r',
+    'command-r-plus',
+    'command-light',
+  ],
+  nim: [
+    'meta/llama-3.1-8b-instruct',
+    'meta/llama-3.1-70b-instruct',
+    'mistralai/mistral-7b-instruct-v0.3',
+    'google/gemma-7b',
+  ],
+  'nim.NVOpenAICompletion': [
+    'bigcode/starcoder2-15b',
+    'mistralai/codestral-22b-instruct-v0.1',
+  ],
+  replicate: [],
+  'rest.RestGenerator': [],
+  ggml: [],
+};
+
+// Garak 可用探针列表，按攻击类别分组
+const GARAK_PROBE_OPTIONS = [
+  {
+    label: 'DAN 越狱攻击',
+    options: [
+      { value: 'dan.Dan_11_0', label: 'dan.Dan_11_0 — DAN 11.0' },
+      { value: 'dan.Dan_10_0', label: 'dan.Dan_10_0 — DAN 10.0' },
+      { value: 'dan.Dan_9_0',  label: 'dan.Dan_9_0 — DAN 9.0' },
+      { value: 'dan.Dan_8_0',  label: 'dan.Dan_8_0 — DAN 8.0' },
+      { value: 'dan.Dan_7_0',  label: 'dan.Dan_7_0 — DAN 7.0' },
+      { value: 'dan.DUDE',     label: 'dan.DUDE — DUDE' },
+    ],
+  },
+  {
+    label: '编码注入',
+    options: [
+      { value: 'encoding.InjectBase64',  label: 'encoding.InjectBase64 — Base64 注入' },
+      { value: 'encoding.InjectHex',     label: 'encoding.InjectHex — Hex 注入' },
+      { value: 'encoding.InjectAscii85', label: 'encoding.InjectAscii85 — Ascii85 注入' },
+      { value: 'encoding.InjectBraille', label: 'encoding.InjectBraille — 盲文注入' },
+      { value: 'encoding.InjectMorse',   label: 'encoding.InjectMorse — 摩斯码注入' },
+    ],
+  },
+  {
+    label: '提示词注入',
+    options: [
+      { value: 'promptinject.HijackHateHumans', label: 'promptinject.HijackHateHumans — 仇恨人类劫持' },
+      { value: 'promptinject.HijackKillHumans', label: 'promptinject.HijackKillHumans — 杀害人类劫持' },
+    ],
+  },
+  {
+    label: '内容安全',
+    options: [
+      { value: 'lmrc.Deadnaming',      label: 'lmrc.Deadnaming — 死名' },
+      { value: 'lmrc.Profanity',       label: 'lmrc.Profanity — 脏话' },
+      { value: 'lmrc.QuackMedicine',   label: 'lmrc.QuackMedicine — 假医疗' },
+      { value: 'lmrc.Sexualisation',   label: 'lmrc.Sexualisation — 性化内容' },
+      { value: 'lmrc.Slurs',           label: 'lmrc.Slurs — 歧视词' },
+    ],
+  },
+  {
+    label: '可靠性',
+    options: [
+      { value: 'snowball.Snowball',                          label: 'snowball.Snowball — 雪球效应' },
+      { value: 'packagehallucination.Python',                label: 'packagehallucination.Python — Python 包幻觉' },
+      { value: 'packagehallucination.JavaScript',            label: 'packagehallucination.JavaScript — JS 包幻觉' },
+    ],
+  },
+];
+
+// 大模型安全体检可用攻击方法（对应 AIG-PromptSecurity 攻击类名）
+const ATTACK_TECHNIQUE_OPTIONS = [
+  { value: 'Raw',            label: 'Raw — 原始提示（无变换）' },
+  { value: 'CharacterSplit', label: 'CharacterSplit — 字符拆分' },
+  { value: 'LongText',       label: 'LongText — 长文本包裹' },
+  { value: 'AsciiDrawing',   label: 'AsciiDrawing — ASCII 图形混淆' },
+  { value: 'LanternRiddle',  label: 'LanternRiddle — 灯谜式混淆' },
+  { value: 'AcrosticPoem',   label: 'AcrosticPoem — 藏头诗混淆' },
+  { value: 'StrataSword',    label: 'StrataSword — StrataSword 多层攻击' },
+  { value: 'Contradictory',  label: 'Contradictory — 矛盾指令' },
+  { value: 'Opposing',       label: 'Opposing — 对立角色' },
+  { value: 'ScriptTemplate', label: 'ScriptTemplate — 脚本模板注入' },
+  { value: 'Shuffle',        label: 'Shuffle — 句子乱序' },
+  { value: 'CodeAttack',     label: 'CodeAttack — 代码包裹攻击' },
+  { value: 'DRAttack',       label: 'DRAttack — 双重角色攻击' },
+  { value: 'CaesarCipher',   label: 'CaesarCipher — 凯撒密码' },
+  { value: 'MirrorText',     label: 'MirrorText — 镜像文本' },
+  { value: 'AsciiSmuggling', label: 'AsciiSmuggling — ASCII 走私' },
+  { value: 'Leetspeak',      label: 'Leetspeak — 1337 语言' },
+  { value: 'AffineCipher',   label: 'AffineCipher — 仿射密码' },
+  { value: 'Zalgo',          label: 'Zalgo — Zalgo 文本' },
+  { value: 'A1Z26',          label: 'A1Z26 — A1Z26 编码' },
+  { value: 'Stego',          label: 'Stego — 隐写术' },
+  { value: 'Aurebesh',       label: 'Aurebesh — Aurebesh 星战字符' },
+  { value: 'Vaporwave',      label: 'Vaporwave — 全角字符' },
+];
+
+// Hard-coded fallbacks used only when the evaluations API fails or is empty,
+// so the form remains usable. Server-loaded names take precedence.
+const FALLBACK_REDTEAM_DATASETS = [
+  'JailBench-Tiny',
+  'JailbreakPrompts-Tiny',
+  'ChatGPT-Jailbreak-Prompts',
+  'JADE-db-v3.0',
+  'HarmfulEvalBenchmark',
+];
+
+// Loose RFC-ish target validation. We accept full URLs, host:port, and bare
+// hostnames / IPs — the backend does the strict parsing later. We only flag
+// obviously bad lines (whitespace inside the token, or empty after split).
+const TARGET_RE = /^[A-Za-z0-9._:\-/?=&%#@+,;~!$()*[\]]+$/;
+
+function modelLabel(m: ModelEntry): string {
+  const n = m.model?.note ? ` (${m.model.note})` : '';
+  return `${m.model_id} — ${m.model?.model ?? ''}${n}`;
+}
+
+/** Open the SSE channel for the given session and resolve only after
+ *  the connection is `open` (or reject after `timeoutMs`). The returned
+ *  EventSource MUST be closed by the caller after the task POST completes
+ *  (the task detail page will reopen its own subscription).
+ */
+function openSseAndWait(
+  sessionId: string,
+  timeoutMs = 15_000,
+): Promise<EventSource> {
+  return new Promise((resolve, reject) => {
+    const es = new EventSource(taskSseUrl(sessionId));
+    const timer = setTimeout(() => {
+      es.close();
+      reject(new Error('SSE 连接超时'));
+    }, timeoutMs);
+    es.onopen = () => {
+      clearTimeout(timer);
+      resolve(es);
+    };
+    es.onerror = () => {
+      // Surface only if we never managed to open.
+      if (es.readyState === EventSource.CLOSED) {
+        clearTimeout(timer);
+        reject(new Error('SSE 连接失败'));
+      }
+    };
+  });
+}
+
+// --- Clone payload (shared with TaskList) ----------------------------------
+
+interface ClonePayload {
+  taskType?: string;
+  title?: string;
+  content?: string;
+  params?: Record<string, unknown>;
+  attachments?: TaskAttachment[];
+  countryIsoCode?: string;
+}
+
+interface CloneRouteState {
+  clonePayload?: ClonePayload;
+}
+
+function readClonePayload(): ClonePayload | null {
+  try {
+    const raw = sessionStorage.getItem(TASK_CLONE_STORAGE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as ClonePayload;
+  } catch {
+    return null;
+  }
+}
+
+// Map the raw `taskType` from a stored task back to the in-app form key.
+// Both PascalCase ("AI-Infra-Scan") and lowercase ("ai_infra_scan") forms
+// are accepted; unknown types fall back to AI-Infra-Scan.
+function normalizeTaskType(t: string | undefined): InAppTaskType {
+  const norm = (t || '').toLowerCase().replace(/_/g, '-');
+  switch (norm) {
+    case 'ai-infra-scan':
+      return 'AI-Infra-Scan';
+    case 'mcp-scan':
+      return 'Mcp-Scan';
+    case 'agent-scan':
+      return 'Agent-Scan';
+    case 'model-redteam-report':
+      return 'Model-Redteam-Report';
+    case 'garak-scan':
+      return 'Garak-Scan';
+    default:
+      return 'AI-Infra-Scan';
+  }
+}
+
+// Build the initial form values for a given task type, optionally seeded
+// from a clone payload.
+function buildInitialValues(
+  type: InAppTaskType,
+  clone: ClonePayload | null,
+): Record<string, unknown> {
+  const params = (clone?.params as Record<string, unknown> | undefined) || {};
+  const language =
+    clone?.countryIsoCode ||
+    localStorage.getItem(TASK_LANG_STORAGE_KEY) ||
+    'zh';
+  switch (type) {
+    case 'AI-Infra-Scan': {
+      const target = Array.isArray(params.target)
+        ? (params.target as string[]).join('\n')
+        : clone?.content || '';
+      return {
+        target,
+        timeout: (params.timeout as number) ?? 30,
+        model_id: params.model_id,
+        language,
+      };
+    }
+    case 'Mcp-Scan':
+      return {
+        content: clone?.content || '',
+        model_id: params.model_id,
+        thread: (params.thread as number) ?? 4,
+        language,
+      };
+    case 'Agent-Scan':
+      return {
+        agent_id: params.agent_id,
+        model_id: params.model_id,
+        prompt: clone?.content || '',
+        language,
+      };
+    case 'Model-Redteam-Report': {
+      const ds = (params.dataset as Record<string, unknown> | undefined) || {};
+      return {
+        model_id: params.model_id,
+        eval_model_id: params.eval_model_id,
+        dataFile: (ds.dataFile as string[]) || ['JailBench-Tiny'],
+        numPrompts: (ds.numPrompts as number) ?? 100,
+        randomSeed: (ds.randomSeed as number) ?? 42,
+        techniques: (params.techniques as string[]) || [],
+        prompt: clone?.content || '',
+        language,
+      };
+    }
+    case 'Garak-Scan': {
+      const hasCustomProbes = Array.isArray(params.probe_groups) && (params.probe_groups as string[]).length > 0;
+      return {
+        useSystemModel: !!(params.model_id as string),
+        system_model_id: (params.model_id as string) || undefined,
+        provider: (params.provider as string) || 'openai',
+        model: (params.model as string) || clone?.content || '',
+        api_key: params.api_key,
+        base_url: params.base_url,
+        probeMode: hasCustomProbes ? 'custom' : 'preset',
+        intensity: (params.intensity as string) || 'fast',
+        probe_groups: (params.probe_groups as string[]) || [],
+        language,
+      };
+    }
+  }
+}
+
+// --- Page ------------------------------------------------------------------
+
+export default function TaskCreate() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+  const cloneFromQuery = searchParams.get('clone');
+  const cloneFromState =
+    (location.state as CloneRouteState | null)?.clonePayload ?? null;
+
+  // Read the clone payload exactly once on mount (lazy useState init,
+  // since useRef has no lazy-init form). Stored in a ref afterwards so
+  // we can null it out after consuming or after the user clicks
+  // "clear clone data" without triggering a re-render.
+  const [cloneInit] = useState<ClonePayload | null>(() =>
+    cloneFromQuery
+      ? readClonePayload() || cloneFromState
+      : cloneFromState,
+  );
+  const cloneRef = useRef<ClonePayload | null>(cloneInit);
+  const initialType = useMemo<InAppTaskType>(
+    () => normalizeTaskType(cloneRef.current?.taskType),
+    [],
+  );
+
+  const [taskType, setTaskType] = useState<InAppTaskType>(initialType);
+  const [models, setModels] = useState<ModelEntry[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [agentNames, setAgentNames] = useState<string[]>([]);
+  const [datasetNames, setDatasetNames] = useState<string[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [uploadedUrl, setUploadedUrl] = useState<string | null>(null);
+  // Garak-Scan: whether to use a system-configured model instead of manual creds.
+  const [garakUseSystemModel, setGarakUseSystemModel] = useState<boolean>(
+    () => !!(cloneRef.current?.params as Record<string, unknown>)?.model_id,
+  );
+  // Garak-Scan: probe configuration mode — 'preset' uses intensity, 'custom' uses probe_groups.
+  const [garakProbeMode, setGarakProbeMode] = useState<'preset' | 'custom'>(() => {
+    const p = cloneRef.current?.params as Record<string, unknown> | undefined;
+    return Array.isArray(p?.probe_groups) && (p!.probe_groups as string[]).length > 0
+      ? 'custom'
+      : 'preset';
+  });
+  // Garak-Scan: currently selected provider (to drive model name suggestions).
+  const [garakProvider, setGarakProvider] = useState<string>(
+    () => (cloneRef.current?.params as Record<string, unknown>)?.provider as string || 'openai',
+  );
+  // Live-parsed AI-Infra-Scan target preview.
+  const [targetPreview, setTargetPreview] = useState<{
+    valid: string[];
+    invalid: string[];
+  }>({ valid: [], invalid: [] });
+  const [form] = Form.useForm();
+  const sessionIdRef = useRef<string>(genId());
+  const cloneAppliedRef = useRef(false);
+
+  // --- Initial side effects: load models + reference data ---------------
+
+  useEffect(() => {
+    setModelsLoading(true);
+    listModels()
+      .then((m) => setModels(m ?? []))
+      .catch(() => undefined)
+      .finally(() => setModelsLoading(false));
+    listAgentNames()
+      .then((names) => setAgentNames(names ?? []))
+      .catch(() => undefined);
+    // Pre-load a generous page of evaluation names so the redteam dropdown
+    // has the user's full library available without an extra search step.
+    listEvaluations({ page: 1, size: 200 })
+      .then((r) => setDatasetNames((r?.items ?? []).map((e) => e.name)))
+      .catch(() => undefined);
+  }, []);
+
+  // Reset form whenever the task type changes. If we still have a pending
+  // clone payload (matching the new type) on the *first* render after mount,
+  // re-apply it so e.g. switching to MCP after cloning an MCP task keeps
+  // the values; otherwise fall back to plain defaults.
+  useEffect(() => {
+    const clone = cloneRef.current;
+    const useClone =
+      !cloneAppliedRef.current &&
+      clone &&
+      normalizeTaskType(clone.taskType) === taskType;
+    const initial = buildInitialValues(taskType, useClone ? clone : null);
+    form.resetFields();
+    form.setFieldsValue(initial);
+    setUploadProgress(null);
+    // For Mcp-Scan, restore the first attachment URL if cloning.
+    if (
+      useClone &&
+      taskType === 'Mcp-Scan' &&
+      clone?.attachments &&
+      clone.attachments.length > 0
+    ) {
+      setUploadedUrl(clone.attachments[0].fileUrl);
+    } else {
+      setUploadedUrl(null);
+    }
+    // Sync Garak system model toggle from initial values.
+    if (taskType === 'Garak-Scan') {
+      setGarakUseSystemModel(!!(initial.useSystemModel));
+      setGarakProbeMode((initial.probeMode as 'preset' | 'custom') || 'preset');
+      setGarakProvider((initial.provider as string) || 'openai');
+    } else {
+      setGarakUseSystemModel(false);
+      setGarakProbeMode('preset');
+      setGarakProvider('openai');
+    }
+    if (useClone) {
+      cloneAppliedRef.current = true;
+    }
+    // Refresh sessionId for every fresh form so a previously failed submit
+    // can't poison the next attempt's SSE channel.
+    sessionIdRef.current = genId();
+    // Also recompute the AI-Infra target preview from the seeded value.
+    if (taskType === 'AI-Infra-Scan') {
+      computeTargetPreview(String(initial.target ?? ''));
+    } else {
+      setTargetPreview({ valid: [], invalid: [] });
+    }
+  }, [taskType, form]);
+
+  const modelOptions = useMemo(
+    () => models.map((m) => ({ value: m.model_id, label: modelLabel(m) })),
+    [models],
+  );
+
+  const agentOptions = useMemo(
+    () => agentNames.map((n) => ({ value: n, label: n })),
+    [agentNames],
+  );
+
+  // Merge live evaluation names with the legacy fallback list, dedup, sort.
+  const datasetOptions = useMemo(() => {
+    const seen = new Set<string>();
+    const out: { value: string; label: string }[] = [];
+    for (const n of [...datasetNames, ...FALLBACK_REDTEAM_DATASETS]) {
+      if (!n || seen.has(n)) continue;
+      seen.add(n);
+      out.push({ value: n, label: n });
+    }
+    return out;
+  }, [datasetNames]);
+
+  const computeTargetPreview = (raw: string) => {
+    const tokens = raw
+      .split(/[\s,;\n]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    // Dedup while preserving first-seen order.
+    const seen = new Set<string>();
+    const valid: string[] = [];
+    const invalid: string[] = [];
+    for (const t of tokens) {
+      if (seen.has(t)) continue;
+      seen.add(t);
+      if (TARGET_RE.test(t)) valid.push(t);
+      else invalid.push(t);
+    }
+    setTargetPreview({ valid, invalid });
+  };
+
+  const handleManualUpload = async (file: File): Promise<boolean> => {
+    setUploadProgress(0);
+    try {
+      const r = await uploadTaskFile(file, (p) => setUploadProgress(p));
+      setUploadedUrl(r.fileUrl);
+      message.success(`已上传：${r.filename}`);
+    } catch (e) {
+      message.error((e as Error).message);
+    } finally {
+      setUploadProgress(null);
+    }
+    // Always return false → suppress antd Upload's built-in xhr.
+    return false;
+  };
+
+  const buildRequest = (values: Record<string, unknown>): CreateTaskRequest => {
+    const sessionId = sessionIdRef.current;
+    const id = genId();
+    const timestamp = Date.now();
+    const language = (values.language as string) || 'zh';
+    // Persist the user's choice for next time.
+    try {
+      localStorage.setItem(TASK_LANG_STORAGE_KEY, language);
+    } catch {
+      /* ignore quota / privacy mode */
+    }
+
+    const base: CreateTaskRequest = {
+      id,
+      sessionId,
+      taskType,
+      timestamp,
+      content: '',
+      params: {},
+      attachments: [],
+      countryIsoCode: language,
+    };
+
+    switch (taskType) {
+      case 'AI-Infra-Scan': {
+        const targets = String(values.target || '')
+          .split(/[\s,;\n]+/)
+          .map((s) => s.trim())
+          .filter(Boolean);
+        // Dedup while preserving order.
+        const seen = new Set<string>();
+        const dedup: string[] = [];
+        for (const t of targets) {
+          if (!seen.has(t)) {
+            seen.add(t);
+            dedup.push(t);
+          }
+        }
+        base.content = dedup.join('\n');
+        base.params = {
+          model_id: values.model_id,
+          target: dedup,
+          timeout: values.timeout ?? 30,
+        };
+        break;
+      }
+      case 'Mcp-Scan': {
+        base.content = (values.content as string) || '';
+        base.params = {
+          model_id: values.model_id,
+          thread: values.thread ?? 4,
+          language,
+        };
+        if (uploadedUrl) {
+          base.attachments = [uploadedUrl];
+        }
+        break;
+      }
+      case 'Agent-Scan': {
+        base.content = (values.prompt as string) || '';
+        base.params = {
+          agent_id: values.agent_id,
+          model_id: values.model_id,
+          language,
+        };
+        break;
+      }
+      case 'Model-Redteam-Report': {
+        const target = (values.model_id as string[]) || [];
+        base.content = (values.prompt as string) || '';
+        base.params = {
+          model_id: target,
+          eval_model_id: values.eval_model_id,
+          techniques: (values.techniques as string[])?.length
+            ? values.techniques
+            : ['Raw'],
+          dataset: {
+            dataFile: values.dataFile,
+            numPrompts: values.numPrompts ?? 100,
+            randomSeed: values.randomSeed ?? 42,
+          },
+        };
+        break;
+      }
+      case 'Garak-Scan': {
+        base.content = (values.model as string) || '';
+        // probeMode: 'preset' → use intensity; 'custom' → use probe_groups
+        const useCustomProbes = garakProbeMode === 'custom';
+        const probeGroups = useCustomProbes
+          ? ((values.probe_groups as string[]) || [])
+          : [];
+        const intensity = useCustomProbes ? '' : ((values.intensity as string) || 'fast');
+        if (garakUseSystemModel && values.system_model_id) {
+          base.params = {
+            model_id: values.system_model_id,
+            intensity,
+            ...(probeGroups.length > 0 ? { probe_groups: probeGroups } : {}),
+          };
+        } else {
+          base.params = {
+            provider: values.provider,
+            model: values.model,
+            api_key: values.api_key,
+            base_url: values.base_url,
+            intensity,
+            ...(probeGroups.length > 0 ? { probe_groups: probeGroups } : {}),
+          };
+        }
+        break;
+      }
+    }
+    return base;
+  };
+
+  const onSubmit = async () => {
+    let values: Record<string, unknown>;
+    try {
+      values = await form.validateFields();
+    } catch {
+      return;
+    }
+    if (taskType === 'Mcp-Scan' && !uploadedUrl && !values.content) {
+      message.error('请上传源码 zip 或填写远程 MCP 地址');
+      return;
+    }
+    if (taskType === 'AI-Infra-Scan' && targetPreview.valid.length === 0) {
+      message.error('未识别到任何合法目标，请检查 URL / IP 格式');
+      return;
+    }
+    if (taskType === 'AI-Infra-Scan' && targetPreview.invalid.length > 0) {
+      // Soft warning — backend will perform the authoritative parse.
+      message.warning(
+        `发现 ${targetPreview.invalid.length} 条疑似非法目标，已忽略`,
+      );
+    }
+    const req = buildRequest(values);
+    setSubmitting(true);
+    let es: EventSource | null = null;
+    try {
+      // Step 1: open SSE first — backend AddTask blocks until it sees the connection.
+      es = await openSseAndWait(req.sessionId);
+      // Step 2: post create.
+      const resp = await createTask(req);
+      message.success('任务已创建：' + (resp?.title ?? req.sessionId));
+      // The detail page will open its own SSE subscription; close ours
+      // *after* navigating to avoid losing the very first events.
+      // Clear the clone payload now that it has been consumed successfully.
+      sessionStorage.removeItem(TASK_CLONE_STORAGE_KEY);
+      navigate(`/tasks/${encodeURIComponent(req.sessionId)}`);
+    } catch (e) {
+      message.error((e as Error).message);
+    } finally {
+      // Close after a short delay so any pre-flight events still flush.
+      if (es) {
+        setTimeout(() => es && es.close(), 500);
+      }
+      setSubmitting(false);
+    }
+  };
+
+  const renderForm = () => {
+    switch (taskType) {
+      case 'AI-Infra-Scan':
+        return (
+          <>
+            <Form.Item
+              name="target"
+              label="扫描目标"
+              tooltip="支持 URL / IP / 域名，多个用换行、空格、逗号或分号分隔；自动去重"
+              rules={[{ required: true, message: '请填写至少一个扫描目标' }]}
+            >
+              <Input.TextArea
+                rows={5}
+                placeholder={'https://example.com\n10.0.0.1:11434'}
+                onChange={(e) => computeTargetPreview(e.target.value)}
+              />
+            </Form.Item>
+            {targetPreview.valid.length + targetPreview.invalid.length > 0 ? (
+              <Alert
+                style={{ marginBottom: 16 }}
+                type={targetPreview.invalid.length > 0 ? 'warning' : 'info'}
+                showIcon
+                message={
+                  <Space size={8} wrap>
+                    <span>
+                      已识别 <Tag color="blue">{targetPreview.valid.length}</Tag>{' '}
+                      个有效目标
+                    </span>
+                    {targetPreview.invalid.length > 0 ? (
+                      <span>
+                        ，<Tag color="orange">{targetPreview.invalid.length}</Tag>{' '}
+                        条疑似非法（提交时将被忽略）
+                      </span>
+                    ) : null}
+                  </Space>
+                }
+                description={
+                  targetPreview.invalid.length > 0 ? (
+                    <Typography.Text type="secondary">
+                      非法示例：{targetPreview.invalid.slice(0, 3).join(', ')}
+                    </Typography.Text>
+                  ) : undefined
+                }
+              />
+            ) : null}
+            <Form.Item name="timeout" label="超时(秒)" initialValue={30}>
+              <InputNumber min={1} max={600} />
+            </Form.Item>
+            <Form.Item name="model_id" label="辅助分析模型(可选)">
+              <Select
+                allowClear
+                showSearch
+                optionFilterProp="label"
+                loading={modelsLoading}
+                options={modelOptions}
+                placeholder="不选则不进行 LLM 辅助分析"
+              />
+            </Form.Item>
+          </>
+        );
+      case 'Mcp-Scan':
+        return (
+          <>
+            <Form.Item label="源码 zip(可选)">
+              <Upload
+                accept=".zip"
+                maxCount={1}
+                beforeUpload={(f) => handleManualUpload(f as File)}
+                onRemove={() => {
+                  setUploadedUrl(null);
+                  return true;
+                }}
+              >
+                <Button icon={<UploadOutlined />}>选择 zip</Button>
+              </Upload>
+              {uploadProgress !== null ? (
+                <Progress percent={uploadProgress} size="small" />
+              ) : null}
+              {uploadedUrl ? (
+                <Typography.Text type="success">
+                  已上传：<code>{uploadedUrl}</code>
+                </Typography.Text>
+              ) : null}
+            </Form.Item>
+            <Form.Item
+              name="content"
+              label="远程 MCP 地址(可选)"
+              tooltip="若上传了源码 zip，可留空"
+            >
+              <Input placeholder="https://mcp-server.example.com 或 github 仓库 URL" />
+            </Form.Item>
+            <Form.Item
+              name="model_id"
+              label="模型"
+              rules={[{ required: true, message: '请选择模型' }]}
+            >
+              <Select
+                showSearch
+                optionFilterProp="label"
+                loading={modelsLoading}
+                options={modelOptions}
+                placeholder="选择已配置的模型"
+              />
+            </Form.Item>
+            <Form.Item name="thread" label="并发线程数" initialValue={4}>
+              <InputNumber min={1} max={32} />
+            </Form.Item>
+          </>
+        );
+      case 'Agent-Scan':
+        return (
+          <>
+            <Form.Item
+              name="agent_id"
+              label="Agent 配置"
+              tooltip="从 知识库 → Agent 配置 中选择，或手动填写未在列表中的 ID"
+              rules={[{ required: true, message: '请选择或填写 Agent ID' }]}
+            >
+              <AutoComplete
+                options={agentOptions}
+                placeholder="例如 my-dify-agent"
+                filterOption={(input, opt) =>
+                  String(opt?.value ?? '')
+                    .toLowerCase()
+                    .includes(input.toLowerCase())
+                }
+              />
+            </Form.Item>
+            <Form.Item
+              name="model_id"
+              label="评估模型"
+              rules={[{ required: true, message: '请选择评估模型' }]}
+            >
+              <Select
+                showSearch
+                optionFilterProp="label"
+                loading={modelsLoading}
+                options={modelOptions}
+                placeholder="选择已配置的模型"
+              />
+            </Form.Item>
+            <Form.Item name="prompt" label="附加扫描提示(可选)">
+              <Input.TextArea rows={3} />
+            </Form.Item>
+          </>
+        );
+      case 'Model-Redteam-Report':
+        return (
+          <>
+            <Form.Item
+              name="model_id"
+              label="待评估模型"
+              rules={[{ required: true, message: '至少选择一个模型' }]}
+            >
+              <Select
+                mode="multiple"
+                showSearch
+                optionFilterProp="label"
+                loading={modelsLoading}
+                options={modelOptions}
+              />
+            </Form.Item>
+            <Form.Item
+              name="eval_model_id"
+              label="裁判模型"
+              rules={[{ required: true, message: '请选择裁判模型' }]}
+            >
+              <Select
+                showSearch
+                optionFilterProp="label"
+                loading={modelsLoading}
+                options={modelOptions}
+              />
+            </Form.Item>
+            <Form.Item
+              name="dataFile"
+              label="数据集"
+              tooltip="来源于 知识库 → 评测集；可选多个"
+              rules={[{ required: true, message: '至少选择一个数据集' }]}
+              initialValue={['JailBench-Tiny']}
+            >
+              <Select
+                mode="multiple"
+                showSearch
+                options={datasetOptions}
+                placeholder="选择评测集"
+              />
+            </Form.Item>
+            <Form.Item name="numPrompts" label="样本数" initialValue={100}>
+              <InputNumber min={1} max={10000} />
+            </Form.Item>
+            <Form.Item name="randomSeed" label="随机种子" initialValue={42}>
+              <InputNumber min={0} />
+            </Form.Item>
+            <Form.Item
+              name="techniques"
+              label="攻击方法"
+              tooltip="选择对模型施加的攻击变换技术；留空时默认使用 Raw（原始提示）。可多选以组合测试。"
+              initialValue={[]}
+            >
+              <Select
+                mode="multiple"
+                allowClear
+                showSearch
+                optionFilterProp="label"
+                placeholder="默认使用 Raw（原始提示），可选额外攻击方法"
+                options={ATTACK_TECHNIQUE_OPTIONS}
+              />
+            </Form.Item>
+            <Form.Item name="prompt" label="自定义 prompt(可选)">
+              <Input.TextArea rows={2} />
+            </Form.Item>
+          </>
+        );
+      case 'Garak-Scan':
+        return (
+          <>
+            {/* ── 目标模型配置 ── */}
+            <Form.Item label="目标模型来源">
+              <Space size={8}>
+                <Switch
+                  checked={garakUseSystemModel}
+                  onChange={(v) => {
+                    setGarakUseSystemModel(v);
+                    form.setFieldsValue({
+                      system_model_id: undefined,
+                      provider: 'openai',
+                      model: '',
+                      api_key: '',
+                      base_url: '',
+                    });
+                    setGarakProvider('openai');
+                  }}
+                />
+                <Typography.Text type="secondary">
+                  {garakUseSystemModel
+                    ? '使用系统已配置的模型（无需手动填写 API Key）'
+                    : '手动指定模型与凭证'}
+                </Typography.Text>
+              </Space>
+            </Form.Item>
+            {garakUseSystemModel ? (
+              <Form.Item
+                name="system_model_id"
+                label="系统配置模型"
+                rules={[{ required: true, message: '请选择一个系统配置模型' }]}
+              >
+                <Select
+                  showSearch
+                  optionFilterProp="label"
+                  loading={modelsLoading}
+                  options={modelOptions}
+                  placeholder="选择已配置的模型"
+                />
+              </Form.Item>
+            ) : (
+              <>
+                <Form.Item
+                  name="provider"
+                  label="模型提供商"
+                  rules={[{ required: true, message: '请选择模型提供商' }]}
+                  initialValue="openai"
+                >
+                  <Select
+                    showSearch
+                    optionFilterProp="label"
+                    options={GARAK_PROVIDERS}
+                    onChange={(v: string) => {
+                      setGarakProvider(v);
+                      // Clear model name when switching providers to avoid confusion.
+                      form.setFieldsValue({ model: '', base_url: '' });
+                    }}
+                  />
+                </Form.Item>
+                <Form.Item
+                  name="model"
+                  label="模型名称"
+                  rules={[{ required: true, message: '请填写或选择模型名称' }]}
+                >
+                  <AutoComplete
+                    options={(PROVIDER_MODEL_SUGGESTIONS[garakProvider] ?? []).map(
+                      (m) => ({ value: m, label: m }),
+                    )}
+                    placeholder={
+                      garakProvider === 'ollama'
+                        ? '例如 llama3:8b'
+                        : garakProvider.startsWith('huggingface')
+                        ? '例如 meta-llama/Llama-2-7b-chat-hf'
+                        : garakProvider === 'ggml'
+                        ? '/path/to/ggml-model.bin'
+                        : '例如 gpt-4o'
+                    }
+                    filterOption={(input, opt) =>
+                      String(opt?.value ?? '').toLowerCase().includes(input.toLowerCase())
+                    }
+                  />
+                </Form.Item>
+                <Form.Item name="api_key" label="API Key(可选)">
+                  <Input.Password
+                    autoComplete="new-password"
+                    placeholder={
+                      garakProvider === 'ollama' || garakProvider === 'ggml'
+                        ? '本地模型无需填写'
+                        : '请填写对应平台的 API Key'
+                    }
+                  />
+                </Form.Item>
+                <Form.Item
+                  name="base_url"
+                  label="Base URL(可选)"
+                  tooltip="本地部署或反向代理时填写；使用云端 API 通常留空"
+                >
+                  <AutoComplete
+                    options={
+                      garakProvider === 'ollama'
+                        ? [
+                            { value: 'http://localhost:11434/v1', label: 'http://localhost:11434/v1（默认本地）' },
+                          ]
+                        : garakProvider === 'nim'
+                        ? [
+                            { value: 'https://integrate.api.nvidia.com/v1', label: 'NVIDIA NIM Cloud' },
+                          ]
+                        : []
+                    }
+                    placeholder="https://api.example.com/v1"
+                    filterOption={false}
+                  />
+                </Form.Item>
+              </>
+            )}
+
+            {/* ── 探针配置 ── */}
+            <Form.Item label="探针配置模式">
+              <Segmented
+                value={garakProbeMode}
+                onChange={(v) => {
+                  setGarakProbeMode(v as 'preset' | 'custom');
+                  // Reset the mode-specific fields to avoid stale values.
+                  form.setFieldsValue({ intensity: 'fast', probe_groups: [] });
+                }}
+                options={[
+                  { value: 'preset', label: '⚡ 快速预设' },
+                  { value: 'custom', label: '🔬 自定义探针' },
+                ]}
+              />
+            </Form.Item>
+            {garakProbeMode === 'preset' ? (
+              <Form.Item
+                name="intensity"
+                label="扫描强度"
+                initialValue="fast"
+                tooltip="Fast 使用少量高价值探针（约15min）；Standard 覆盖主流攻击面；Deep 使用全量探针。"
+              >
+                <Select options={INTENSITY_OPTIONS} />
+              </Form.Item>
+            ) : (
+              <Form.Item
+                name="probe_groups"
+                label="探针选择"
+                tooltip="选择要运行的 Garak 探针；留空则自动退回 fast 默认探针集。"
+                rules={[{ required: true, message: '自定义模式下请至少选择一个探针' }]}
+                initialValue={[]}
+              >
+                <Select
+                  mode="multiple"
+                  allowClear
+                  showSearch
+                  optionFilterProp="label"
+                  placeholder="选择探针（可多选，支持搜索）"
+                  options={GARAK_PROBE_OPTIONS}
+                />
+              </Form.Item>
+            )}
+          </>
+        );
+    }
+  };
+
+  const cloneActive = cloneAppliedRef.current && !!cloneRef.current;
+
+  return (
+    <Card>
+      <PageHeader
+        title="新建扫描任务"
+        description="选择任务类型并填写参数。提交时会先建立 SSE 连接、再创建任务。"
+        extra={
+          <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/tasks')}>
+            返回任务列表
+          </Button>
+        }
+      />
+      {cloneActive ? (
+        <Alert
+          type="success"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message={
+            <Space size={6} wrap>
+              <span>
+                已从来源任务克隆参数
+                {cloneRef.current?.title ? (
+                  <>
+                    （<Typography.Text strong>{cloneRef.current.title}</Typography.Text>）
+                  </>
+                ) : null}
+                ，请按需调整后提交。
+              </span>
+              <Button
+                size="small"
+                type="link"
+                onClick={() => {
+                  cloneAppliedRef.current = false;
+                  cloneRef.current = null;
+                  sessionStorage.removeItem(TASK_CLONE_STORAGE_KEY);
+                  // Re-trigger initial values build.
+                  form.resetFields();
+                  form.setFieldsValue(buildInitialValues(taskType, null));
+                  if (taskType === 'AI-Infra-Scan') {
+                    setTargetPreview({ valid: [], invalid: [] });
+                  }
+                }}
+              >
+                清空克隆数据
+              </Button>
+            </Space>
+          }
+        />
+      ) : null}
+      <Segmented
+        options={TASK_TYPES.map((t) => ({ value: t.value, label: t.label }))}
+        value={taskType}
+        onChange={(v) => setTaskType(v as InAppTaskType)}
+        block
+        style={{ marginBottom: 16 }}
+      />
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 16 }}
+        message={TASK_TYPES.find((t) => t.value === taskType)?.description}
+      />
+      <Spin spinning={submitting} tip="正在建立 SSE 并创建任务...">
+        <Form
+          form={form}
+          layout="vertical"
+          requiredMark="optional"
+          style={{ maxWidth: 720 }}
+        >
+          {renderForm()}
+          <Form.Item name="language" label="语言" initialValue="zh">
+            <Select
+              options={[
+                { value: 'zh', label: '中文' },
+                { value: 'en', label: 'English' },
+              ]}
+            />
+          </Form.Item>
+          <Space>
+            <Button type="primary" onClick={onSubmit} loading={submitting}>
+              创建任务
+            </Button>
+            <Button
+              onClick={() => {
+                form.resetFields();
+                form.setFieldsValue(buildInitialValues(taskType, null));
+                setUploadedUrl(null);
+                setTargetPreview({ valid: [], invalid: [] });
+              }}
+            >
+              重置
+            </Button>
+          </Space>
+        </Form>
+      </Spin>
+    </Card>
+  );
+}
