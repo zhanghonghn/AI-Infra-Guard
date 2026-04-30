@@ -86,6 +86,83 @@ const GARAK_PROVIDERS = [
   { value: 'huggingface', label: 'huggingface' },
 ];
 
+// Garak 可用探针列表，按攻击类别分组
+const GARAK_PROBE_OPTIONS = [
+  {
+    label: 'DAN 越狱攻击',
+    options: [
+      { value: 'dan.Dan_11_0', label: 'dan.Dan_11_0 — DAN 11.0' },
+      { value: 'dan.Dan_10_0', label: 'dan.Dan_10_0 — DAN 10.0' },
+      { value: 'dan.Dan_9_0',  label: 'dan.Dan_9_0 — DAN 9.0' },
+      { value: 'dan.Dan_8_0',  label: 'dan.Dan_8_0 — DAN 8.0' },
+      { value: 'dan.Dan_7_0',  label: 'dan.Dan_7_0 — DAN 7.0' },
+      { value: 'dan.DUDE',     label: 'dan.DUDE — DUDE' },
+    ],
+  },
+  {
+    label: '编码注入',
+    options: [
+      { value: 'encoding.InjectBase64',  label: 'encoding.InjectBase64 — Base64 注入' },
+      { value: 'encoding.InjectHex',     label: 'encoding.InjectHex — Hex 注入' },
+      { value: 'encoding.InjectAscii85', label: 'encoding.InjectAscii85 — Ascii85 注入' },
+      { value: 'encoding.InjectBraille', label: 'encoding.InjectBraille — 盲文注入' },
+      { value: 'encoding.InjectMorse',   label: 'encoding.InjectMorse — 摩斯码注入' },
+    ],
+  },
+  {
+    label: '提示词注入',
+    options: [
+      { value: 'promptinject.HijackHateHumans', label: 'promptinject.HijackHateHumans — 仇恨人类劫持' },
+      { value: 'promptinject.HijackKillHumans', label: 'promptinject.HijackKillHumans — 杀害人类劫持' },
+    ],
+  },
+  {
+    label: '内容安全',
+    options: [
+      { value: 'lmrc.Deadnaming',      label: 'lmrc.Deadnaming — 死名' },
+      { value: 'lmrc.Profanity',       label: 'lmrc.Profanity — 脏话' },
+      { value: 'lmrc.QuackMedicine',   label: 'lmrc.QuackMedicine — 假医疗' },
+      { value: 'lmrc.Sexualisation',   label: 'lmrc.Sexualisation — 性化内容' },
+      { value: 'lmrc.Slurs',           label: 'lmrc.Slurs — 歧视词' },
+    ],
+  },
+  {
+    label: '可靠性',
+    options: [
+      { value: 'snowball.Snowball',                          label: 'snowball.Snowball — 雪球效应' },
+      { value: 'packagehallucination.Python',                label: 'packagehallucination.Python — Python 包幻觉' },
+      { value: 'packagehallucination.JavaScript',            label: 'packagehallucination.JavaScript — JS 包幻觉' },
+    ],
+  },
+];
+
+// 大模型安全体检可用攻击方法（对应 AIG-PromptSecurity 攻击类名）
+const ATTACK_TECHNIQUE_OPTIONS = [
+  { value: 'Raw',            label: 'Raw — 原始提示（无变换）' },
+  { value: 'CharacterSplit', label: 'CharacterSplit — 字符拆分' },
+  { value: 'LongText',       label: 'LongText — 长文本包裹' },
+  { value: 'AsciiDrawing',   label: 'AsciiDrawing — ASCII 图形混淆' },
+  { value: 'LanternRiddle',  label: 'LanternRiddle — 灯谜式混淆' },
+  { value: 'AcrosticPoem',   label: 'AcrosticPoem — 藏头诗混淆' },
+  { value: 'StrataSword',    label: 'StrataSword — StrataSword 多层攻击' },
+  { value: 'Contradictory',  label: 'Contradictory — 矛盾指令' },
+  { value: 'Opposing',       label: 'Opposing — 对立角色' },
+  { value: 'ScriptTemplate', label: 'ScriptTemplate — 脚本模板注入' },
+  { value: 'Shuffle',        label: 'Shuffle — 句子乱序' },
+  { value: 'CodeAttack',     label: 'CodeAttack — 代码包裹攻击' },
+  { value: 'DRAttack',       label: 'DRAttack — 双重角色攻击' },
+  { value: 'CaesarCipher',   label: 'CaesarCipher — 凯撒密码' },
+  { value: 'MirrorText',     label: 'MirrorText — 镜像文本' },
+  { value: 'AsciiSmuggling', label: 'AsciiSmuggling — ASCII 走私' },
+  { value: 'Leetspeak',      label: 'Leetspeak — 1337 语言' },
+  { value: 'AffineCipher',   label: 'AffineCipher — 仿射密码' },
+  { value: 'Zalgo',          label: 'Zalgo — Zalgo 文本' },
+  { value: 'A1Z26',          label: 'A1Z26 — A1Z26 编码' },
+  { value: 'Stego',          label: 'Stego — 隐写术' },
+  { value: 'Aurebesh',       label: 'Aurebesh — Aurebesh 星战字符' },
+  { value: 'Vaporwave',      label: 'Vaporwave — 全角字符' },
+];
+
 // Hard-coded fallbacks used only when the evaluations API fails or is empty,
 // so the form remains usable. Server-loaded names take precedence.
 const FALLBACK_REDTEAM_DATASETS = [
@@ -222,6 +299,7 @@ function buildInitialValues(
         dataFile: (ds.dataFile as string[]) || ['JailBench-Tiny'],
         numPrompts: (ds.numPrompts as number) ?? 100,
         randomSeed: (ds.randomSeed as number) ?? 42,
+        techniques: (params.techniques as string[]) || [],
         prompt: clone?.content || '',
         language,
       };
@@ -235,6 +313,7 @@ function buildInitialValues(
         api_key: params.api_key,
         base_url: params.base_url,
         intensity: (params.intensity as string) || 'fast',
+        probe_groups: (params.probe_groups as string[]) || [],
         language,
       };
   }
@@ -472,6 +551,9 @@ export default function TaskCreate() {
         base.params = {
           model_id: target,
           eval_model_id: values.eval_model_id,
+          techniques: (values.techniques as string[])?.length
+            ? values.techniques
+            : ['Raw'],
           dataset: {
             dataFile: values.dataFile,
             numPrompts: values.numPrompts ?? 100,
@@ -482,10 +564,12 @@ export default function TaskCreate() {
       }
       case 'Garak-Scan': {
         base.content = (values.model as string) || '';
+        const probeGroups = (values.probe_groups as string[]) || [];
         if (garakUseSystemModel && values.system_model_id) {
           base.params = {
             model_id: values.system_model_id,
             intensity: values.intensity || 'fast',
+            ...(probeGroups.length > 0 ? { probe_groups: probeGroups } : {}),
           };
         } else {
           base.params = {
@@ -494,6 +578,7 @@ export default function TaskCreate() {
             api_key: values.api_key,
             base_url: values.base_url,
             intensity: values.intensity || 'fast',
+            ...(probeGroups.length > 0 ? { probe_groups: probeGroups } : {}),
           };
         }
         break;
@@ -742,6 +827,21 @@ export default function TaskCreate() {
             <Form.Item name="randomSeed" label="随机种子" initialValue={42}>
               <InputNumber min={0} />
             </Form.Item>
+            <Form.Item
+              name="techniques"
+              label="攻击方法"
+              tooltip="选择对模型施加的攻击变换技术；留空时默认使用 Raw（原始提示）。可多选以组合测试。"
+              initialValue={[]}
+            >
+              <Select
+                mode="multiple"
+                allowClear
+                showSearch
+                optionFilterProp="label"
+                placeholder="默认使用 Raw（原始提示），可选额外攻击方法"
+                options={ATTACK_TECHNIQUE_OPTIONS}
+              />
+            </Form.Item>
             <Form.Item name="prompt" label="自定义 prompt(可选)">
               <Input.TextArea rows={2} />
             </Form.Item>
@@ -814,6 +914,21 @@ export default function TaskCreate() {
             )}
             <Form.Item name="intensity" label="扫描强度" initialValue="fast">
               <Select options={INTENSITY_OPTIONS} />
+            </Form.Item>
+            <Form.Item
+              name="probe_groups"
+              label="自定义探针"
+              tooltip="留空时按扫描强度自动选择探针；选择后将覆盖扫描强度设置，仅运行所选探针。"
+              initialValue={[]}
+            >
+              <Select
+                mode="multiple"
+                allowClear
+                showSearch
+                optionFilterProp="label"
+                placeholder="留空则按扫描强度自动选择探针"
+                options={GARAK_PROBE_OPTIONS}
+              />
             </Form.Item>
           </>
         );
