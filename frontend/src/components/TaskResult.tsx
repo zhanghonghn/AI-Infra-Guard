@@ -96,7 +96,7 @@ function MarkdownRender({
 }) {
   if (!text) return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} />;
 
-  const rawHtml = marked.parse(text, { async: false }) as string;
+  const rawHtml = marked.parse(text, { async: false });
   const safeHtml = DOMPurify.sanitize(rawHtml, { USE_PROFILES: { html: true } });
 
   return (
@@ -1500,6 +1500,8 @@ function GarakScanResult({
       .finally(() => setFindingsLoading(false));
     // `findings` is intentionally omitted: we only want to trigger a fetch when
     // scanIdField changes, not when findings changes (that would cause a loop).
+    // `setFindings` and `setFindingsLoading` are React state setters — guaranteed
+    // stable references by React and safe to omit from the dep array.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scanIdField]);
 
