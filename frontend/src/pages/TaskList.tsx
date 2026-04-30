@@ -1,13 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
+  Badge,
   Button,
   Card,
+  Descriptions,
+  Drawer,
+  Empty,
   Input,
   Modal,
   Popconfirm,
   Select,
   Space,
+  Spin,
   Switch,
   Table,
   Tag,
@@ -17,6 +22,7 @@ import {
 } from 'antd';
 import {
   EditOutlined,
+  EyeOutlined,
   PlusOutlined,
   ReloadOutlined,
 } from '@ant-design/icons';
@@ -30,8 +36,10 @@ import {
   terminateTask,
   updateTaskTitle,
 } from '@/api/tasks';
+import { listFindings } from '@/api/findings';
 import { isTaskRunning, TASK_CLONE_STORAGE_KEY } from '@/utils/task';
 import type { TaskListItem } from '@/types/task';
+import type { Finding } from '@/types/finding';
 
 // Task types — both shapes are accepted by the backend filter:
 // in-app tasks store PascalCase-with-dashes (AI-Infra-Scan), while the
@@ -76,6 +84,50 @@ const STATUS_COLORS: Record<string, string> = {
   terminated: 'warning',
 };
 
+// Map raw backend status strings to the Chinese labels used in the filter.
+const STATUS_LABEL_MAP: Record<string, string> = {
+  pending:    '等待中',
+  todo:       '待处理',
+  doing:      '运行中',
+  running:    '运行中',
+  completed:  '已完成',
+  success:    '已完成',
+  failed:     '失败',
+  error:      '失败',
+  terminated: '已终止',
+};
+
+const SEVERITY_COLORS: Record<string, string> = {
+  critical: 'magenta',
+  high:     'red',
+  medium:   'orange',
+  low:      'gold',
+  info:     'blue',
+  safe:     'green',
+  unknown:  'default',
+};
+
+const SEVERITY_LABELS: Record<string, string> = {
+  critical: '严重',
+  high:     '高危',
+  medium:   '中危',
+  low:      '低危',
+  info:     '信息',
+  safe:     '安全',
+};
+
+function normalizeSev(raw: unknown): string {
+  const s = String(raw ?? '').trim().toLowerCase();
+  if (!s) return 'unknown';
+  if (s === '严重' || s === 'critical') return 'critical';
+  if (s === '高危' || s === '高' || s === 'high') return 'high';
+  if (s === '中危' || s === '中' || s === 'medium' || s === 'med') return 'medium';
+  if (s === '低危' || s === '低' || s === 'low') return 'low';
+  if (s === 'info' || s === 'informational') return 'info';
+  if (s === 'safe' || s === '安全' || s === 'none') return 'safe';
+  return s;
+}
+
 // Map a STATUS_OPTIONS bucket to the set of raw status strings it covers.
 function statusMatches(rowStatus: string | undefined, bucket: string): boolean {
   if (!bucket) return true;
@@ -114,6 +166,10 @@ export default function TaskList() {
   const [renameTarget, setRenameTarget] = useState<TaskListItem | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [renaming, setRenaming] = useState(false);
+  // Findings quick-view drawer state.
+  const [findingsTask, setFindingsTask] = useState<TaskListItem | null>(null);
+  const [findings, setFindings] = useState<Finding[]>([]);
+  const [findingsLoading, setFindingsLoading] = useState(false);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -225,6 +281,21 @@ export default function TaskList() {
     }
   };
 
+  // Findings quick-view: fetch and open drawer.
+  const openFindingsDrawer = async (item: TaskListItem) => {
+    setFindingsTask(item);
+    setFindings([]);
+    setFindingsLoading(true);
+    try {
+      const resp = await listFindings(item.sessionId);
+      setFindings(resp?.findings ?? []);
+    } catch {
+      /* handled */
+    } finally {
+      setFindingsLoading(false);
+    }
+  };
+
   // Apply client-side status filter on top of server-side text/type filtering
   // so users can narrow down without re-fetching.
   const filtered = useMemo(
@@ -285,9 +356,11 @@ export default function TaskList() {
         dataIndex: 'status',
         key: 'status',
         width: 110,
-        render: (v: string) => (
-          <Tag color={STATUS_COLORS[v] ?? 'default'}>{v || 'unknown'}</Tag>
-        ),
+        render: (v: string) => {
+          const key = (v || '').toLowerCase();
+          const label = STATUS_LABEL_MAP[key] ?? (v || '未知');
+          return <Tag color={STATUS_COLORS[key] ?? 'default'}>{label}</Tag>;
+        },
       },
       {
         title: '创建时间',
@@ -306,14 +379,24 @@ export default function TaskList() {
       {
         title: '操作',
         key: 'actions',
-        width: 240,
+        width: 280,
         render: (_v, item) => (
-          <Space size="small">
+          <Space size="small" wrap>
             <Link to={`/tasks/${encodeURIComponent(item.sessionId)}`}>
               <Button size="small" type="link">
                 详情
               </Button>
             </Link>
+            <Tooltip title="快速查看任务的安全问题（Findings）">
+              <Button
+                size="small"
+                type="link"
+                icon={<EyeOutlined />}
+                onClick={() => openFindingsDrawer(item)}
+              >
+                查看问题
+              </Button>
+            </Tooltip>
             <Button size="small" type="link" onClick={() => onClone(item)}>
               克隆
             </Button>
@@ -335,8 +418,8 @@ export default function TaskList() {
         ),
       },
     ],
-    // onClone / onTerminate / onDelete close over `fetchData`; re-derive
-    // columns when the loader identity changes so handlers stay fresh.
+    // onClone / onTerminate / onDelete / openFindingsDrawer close over state;
+    // re-derive columns when fetchData changes so handlers stay fresh.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [fetchData],
   );
@@ -440,6 +523,186 @@ export default function TaskList() {
           placeholder="输入新的任务标题"
         />
       </Modal>
+
+      {/* ── Findings Quick-View Drawer ── */}
+      <Drawer
+        title={
+          <Space>
+            <EyeOutlined />
+            <span>
+              问题快速查看
+              {findingsTask
+                ? ` — ${findingsTask.title || findingsTask.rawTitle || findingsTask.sessionId.slice(0, 8)}`
+                : ''}
+            </span>
+            {!findingsLoading && findings.length > 0 && (
+              <Badge count={findings.length} color="red" />
+            )}
+          </Space>
+        }
+        width={760}
+        open={!!findingsTask}
+        onClose={() => setFindingsTask(null)}
+        destroyOnClose
+        extra={
+          findingsTask && (
+            <Link to={`/tasks/${encodeURIComponent(findingsTask.sessionId)}`}>
+              <Button size="small" type="primary">
+                查看完整详情
+              </Button>
+            </Link>
+          )
+        }
+      >
+        {findingsLoading ? (
+          <div style={{ textAlign: 'center', padding: 48 }}>
+            <Spin tip="加载问题中…" />
+          </div>
+        ) : findings.length === 0 ? (
+          <Empty description="暂无问题记录（任务可能尚未完成或无发现问题）" />
+        ) : (
+          <>
+            {/* Severity summary badges */}
+            <Space wrap style={{ marginBottom: 16 }}>
+              {(['critical', 'high', 'medium', 'low', 'info'] as const).map((sev) => {
+                const cnt = findings.filter(
+                  (f) => normalizeSev(f.severity) === sev,
+                ).length;
+                if (!cnt) return null;
+                return (
+                  <Tag key={sev} color={SEVERITY_COLORS[sev]}>
+                    {SEVERITY_LABELS[sev] ?? sev.toUpperCase()} × {cnt}
+                  </Tag>
+                );
+              })}
+            </Space>
+
+            {/* Findings table */}
+            <Table<Finding>
+              rowKey="finding_id"
+              size="small"
+              pagination={{ pageSize: 15, showSizeChanger: false }}
+              dataSource={[...findings].sort((a, b) => {
+                const sevOrder = ['critical', 'high', 'medium', 'low', 'info', 'safe', 'unknown'];
+                return sevOrder.indexOf(normalizeSev(a.severity)) - sevOrder.indexOf(normalizeSev(b.severity));
+              })}
+              columns={[
+                {
+                  title: '严重性',
+                  dataIndex: 'severity',
+                  key: 'severity',
+                  width: 80,
+                  render: (v) => {
+                    const norm = normalizeSev(v);
+                    return (
+                      <Tag color={SEVERITY_COLORS[norm] ?? 'default'}>
+                        {SEVERITY_LABELS[norm] ?? String(v).toUpperCase()}
+                      </Tag>
+                    );
+                  },
+                },
+                {
+                  title: '风险类型',
+                  dataIndex: 'risk_type_display',
+                  key: 'risk_type',
+                  width: 140,
+                  render: (v, record) => v || record.risk_type || '-',
+                },
+                {
+                  title: '摘要',
+                  dataIndex: 'evidence_summary',
+                  key: 'evidence_summary',
+                  ellipsis: true,
+                  render: (v) => (
+                    <Typography.Text ellipsis={{ tooltip: v }}>
+                      {v || '-'}
+                    </Typography.Text>
+                  ),
+                },
+                {
+                  title: '探针',
+                  dataIndex: 'garak_probe_id',
+                  key: 'probe',
+                  width: 160,
+                  ellipsis: true,
+                  render: (v, record) =>
+                    v ? (
+                      <Typography.Text code style={{ fontSize: 11 }}>
+                        {v}
+                      </Typography.Text>
+                    ) : record.source_engine ? (
+                      <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                        {record.source_engine}
+                      </Typography.Text>
+                    ) : (
+                      '-'
+                    ),
+                },
+                {
+                  title: '处理状态',
+                  dataIndex: 'status',
+                  key: 'status',
+                  width: 90,
+                  render: (v) => {
+                    const colorMap: Record<string, string> = {
+                      open: 'red',
+                      fixed: 'green',
+                      accepted_risk: 'orange',
+                      false_positive: 'default',
+                    };
+                    const labelMap: Record<string, string> = {
+                      open: '待处理',
+                      fixed: '已修复',
+                      accepted_risk: '接受风险',
+                      false_positive: '误报',
+                    };
+                    return (
+                      <Tag color={colorMap[v] ?? 'default'}>
+                        {labelMap[v] ?? v ?? '-'}
+                      </Tag>
+                    );
+                  },
+                },
+              ]}
+              expandable={{
+                expandedRowRender: (record) => (
+                  <Descriptions size="small" column={1} bordered>
+                    {record.fix_recommendation && (
+                      <Descriptions.Item label="修复建议">
+                        {record.fix_recommendation}
+                      </Descriptions.Item>
+                    )}
+                    {record.garak_detector_name && (
+                      <Descriptions.Item label="检测器">
+                        <Typography.Text code>
+                          {record.garak_detector_name}
+                        </Typography.Text>
+                      </Descriptions.Item>
+                    )}
+                    {record.asset && (
+                      <Descriptions.Item label="资产">
+                        {record.asset}
+                      </Descriptions.Item>
+                    )}
+                    {record.confidence !== undefined && (
+                      <Descriptions.Item label="置信度">
+                        {(record.confidence * 100).toFixed(1)}%
+                      </Descriptions.Item>
+                    )}
+                  </Descriptions>
+                ),
+                rowExpandable: (record) =>
+                  !!(
+                    record.fix_recommendation ||
+                    record.garak_detector_name ||
+                    record.asset ||
+                    record.confidence !== undefined
+                  ),
+              }}
+            />
+          </>
+        )}
+      </Drawer>
     </Card>
   );
 }
