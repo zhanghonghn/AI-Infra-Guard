@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Alert,
   AutoComplete,
@@ -298,6 +298,10 @@ interface ClonePayload {
   countryIsoCode?: string;
 }
 
+interface CloneRouteState {
+  clonePayload?: ClonePayload;
+}
+
 function readClonePayload(): ClonePayload | null {
   try {
     const raw = sessionStorage.getItem(TASK_CLONE_STORAGE_KEY);
@@ -401,15 +405,20 @@ function buildInitialValues(
 
 export default function TaskCreate() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams] = useSearchParams();
   const cloneFromQuery = searchParams.get('clone');
+  const cloneFromState =
+    (location.state as CloneRouteState | null)?.clonePayload ?? null;
 
   // Read the clone payload exactly once on mount (lazy useState init,
   // since useRef has no lazy-init form). Stored in a ref afterwards so
   // we can null it out after consuming or after the user clicks
   // "clear clone data" without triggering a re-render.
   const [cloneInit] = useState<ClonePayload | null>(() =>
-    cloneFromQuery ? readClonePayload() : null,
+    cloneFromQuery
+      ? readClonePayload() || cloneFromState
+      : cloneFromState,
   );
   const cloneRef = useRef<ClonePayload | null>(cloneInit);
   const initialType = useMemo<InAppTaskType>(

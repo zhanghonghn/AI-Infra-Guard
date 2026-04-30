@@ -10,6 +10,7 @@ import {
   Spin,
   Table,
   Tag,
+  Tooltip,
   Typography,
 } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
@@ -90,7 +91,7 @@ export default function EvaluationsPage() {
         dataIndex: 'description',
         key: 'description',
         ellipsis: true,
-        render: (v: string, row) => row.description_zh || v,
+        render: (v: string, row) => <div><Tooltip title={row.description_zh || v}>{row.description_zh || v}</Tooltip></div>,
       },
       {
         title: '题目数',
@@ -113,7 +114,7 @@ export default function EvaluationsPage() {
         width: 130,
         render: (v?: number) =>
           typeof v === 'number' && v > 0 ? (
-            <Rate disabled allowHalf value={v} />
+            <Rate disabled allowHalf value={v} style={{ fontSize: 12 }} />
           ) : (
             <span style={{ color: '#bbb' }}>-</span>
           ),
@@ -228,7 +229,7 @@ export default function EvaluationsPage() {
               <Tag>题目数：{detail.count}</Tag>
               {detail.default ? <Tag color="blue">默认</Tag> : null}
               {typeof detail.recommendation === 'number' &&
-              detail.recommendation > 0 ? (
+                detail.recommendation > 0 ? (
                 <span>
                   推荐度：
                   <Rate

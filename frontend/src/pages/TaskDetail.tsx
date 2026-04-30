@@ -26,7 +26,11 @@ import {
   DownloadOutlined,
   EditOutlined,
   ExperimentOutlined,
+  FileTextOutlined,
+  OrderedListOutlined,
+  ProfileOutlined,
   ReloadOutlined,
+  SafetyCertificateOutlined,
   StopOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
@@ -48,14 +52,45 @@ import {
 import type { TaskDetail, TaskMessage } from '@/types/task';
 
 const STATUS_COLORS: Record<string, string> = {
-  pending: 'default',
   todo: 'default',
   doing: 'processing',
-  running: 'processing',
-  completed: 'success',
-  failed: 'error',
+  done: 'success',
+  error: 'error',
   terminated: 'warning',
 };
+
+const STATUS_LABEL_MAP: Record<string, string> = {
+  todo: '待处理',
+  doing: '运行中',
+  done: '已完成',
+  error: '失败',
+  terminated: '已终止',
+};
+
+function normalizeTaskStatus(rawStatus: string | undefined): string {
+  const status = (rawStatus || '').toLowerCase();
+  switch (status) {
+    case 'pending':
+    case 'todo':
+      return 'todo';
+    case 'doing':
+    case 'running':
+      return 'doing';
+    case 'done':
+    case 'completed':
+    case 'success':
+      return 'done';
+    case 'failed':
+    case 'error':
+      return 'error';
+    case 'terminated':
+    case 'cancelled':
+    case 'canceled':
+      return 'terminated';
+    default:
+      return status;
+  }
+}
 
 interface PlanStep {
   stepId: string;
@@ -288,18 +323,21 @@ export default function TaskDetailPage() {
 
   const onClone = () => {
     if (!detail) return;
+    const clonePayload = {
+      taskType: detail.taskType,
+      title: detail.title,
+      content: detail.content,
+      params: detail.params,
+      attachments: detail.attachments,
+      countryIsoCode: detail.countryIsoCode,
+    };
     sessionStorage.setItem(
       TASK_CLONE_STORAGE_KEY,
-      JSON.stringify({
-        taskType: detail.taskType,
-        title: detail.title,
-        content: detail.content,
-        params: detail.params,
-        attachments: detail.attachments,
-        countryIsoCode: detail.countryIsoCode,
-      }),
+      JSON.stringify(clonePayload),
     );
-    navigate(`/tasks/new?clone=${encodeURIComponent(sessionId)}`);
+    navigate(`/tasks/new?clone=${encodeURIComponent(sessionId)}`, {
+      state: { clonePayload },
+    });
   };
 
   const onExport = () => {
@@ -434,14 +472,17 @@ export default function TaskDetailPage() {
             {detail?.status ? (
               <Badge
                 status={
-                  (STATUS_COLORS[detail.status] as
+                  (STATUS_COLORS[normalizeTaskStatus(detail.status)] as
                     | 'default'
                     | 'processing'
                     | 'success'
                     | 'error'
                     | 'warning') || 'default'
                 }
-                text={detail.status}
+                text={
+                  STATUS_LABEL_MAP[normalizeTaskStatus(detail.status)] ||
+                  detail.status
+                }
               />
             ) : null}
             {detail?.createdAt ? (
@@ -506,81 +547,15 @@ export default function TaskDetailPage() {
       <Row gutter={16}>
         <Col xs={24} md={12}>
           <Card
-            title={
-              <Space wrap>
-                <span>实时日志</span>
-                {running ? (
-                  <Badge
-                    status={sse.connected ? 'success' : 'default'}
-                    text={sse.connected ? 'SSE 已连接' : '等待连接'}
-                  />
-                ) : null}
-                <Tag>{renderedTimeline.length} 条</Tag>
+            title={(
+              <Space size={6}>
+                <ProfileOutlined />
+                <span>任务参数</span>
               </Space>
-            }
-            extra={
-              <Space size={8} wrap>
-                <Checkbox.Group
-                  options={LOG_TYPE_OPTIONS}
-                  value={enabledTypes}
-                  onChange={(v) => setEnabledTypes(v as string[])}
-                />
-                <Checkbox
-                  checked={autoScroll}
-                  onChange={(e) => setAutoScroll(e.target.checked)}
-                >
-                  自动滚动
-                </Checkbox>
-                <Button
-                  size="small"
-                  type={paused ? 'primary' : 'default'}
-                  onClick={() => setPaused((p) => !p)}
-                  disabled={!running}
-                >
-                  {paused ? '继续' : '暂停'}
-                </Button>
-              </Space>
-            }
+            )}
             size="small"
             style={{ marginBottom: 16 }}
           >
-            <div ref={logRef} style={{ maxHeight: 540, overflow: 'auto' }}>
-              <Timeline
-                mode="left"
-                items={renderedTimeline.map((m) => ({
-                  label: formatTime(m.timestamp),
-                  color:
-                    m.type === 'toolUsed'
-                      ? 'blue'
-                      : m.type === 'actionLog'
-                      ? 'gray'
-                      : m.type === 'planUpdate' || m.type === 'newPlanStep'
-                      ? 'purple'
-                      : 'green',
-                  children: (
-                    <div>
-                      <Tag>{m.type}</Tag>
-                      <Typography.Text>{summarizeEvent(m)}</Typography.Text>
-                    </div>
-                  ),
-                }))}
-              />
-            </div>
-            {renderedTimeline.length === 0 ? (
-              <Empty
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description={
-                  running
-                    ? '尚未收到匹配筛选条件的事件'
-                    : '暂无日志事件'
-                }
-              />
-            ) : null}
-          </Card>
-        </Col>
-
-        <Col xs={24} md={12}>
-          <Card title="任务参数" size="small" style={{ marginBottom: 16 }}>
             <Descriptions column={1} size="small">
               <Descriptions.Item label="语言">
                 {detail?.countryIsoCode || '-'}
@@ -644,6 +619,7 @@ export default function TaskDetailPage() {
             title={
               <Space>
                 <span>执行计划</span>
+                <OrderedListOutlined />
                 {running ? (
                   <Badge status="processing" text="进行中" />
                 ) : null}
@@ -689,7 +665,88 @@ export default function TaskDetailPage() {
           </Card>
 
           <Card
-            title="最终结果"
+            title={
+              <Space wrap>
+                <span>实时日志</span>
+                <FileTextOutlined />
+                {running ? (
+                  <Badge
+                    status={sse.connected ? 'success' : 'default'}
+                    text={sse.connected ? 'SSE 已连接' : '等待连接'}
+                  />
+                ) : null}
+                <Tag>{renderedTimeline.length} 条</Tag>
+              </Space>
+            }
+            extra={
+              <Space size={8} wrap>
+                <Checkbox.Group
+                  options={LOG_TYPE_OPTIONS}
+                  value={enabledTypes}
+                  onChange={(v) => setEnabledTypes(v as string[])}
+                />
+                <Checkbox
+                  checked={autoScroll}
+                  onChange={(e) => setAutoScroll(e.target.checked)}
+                >
+                  自动滚动
+                </Checkbox>
+                <Button
+                  size="small"
+                  type={paused ? 'primary' : 'default'}
+                  onClick={() => setPaused((p) => !p)}
+                  disabled={!running}
+                >
+                  {paused ? '继续' : '暂停'}
+                </Button>
+              </Space>
+            }
+            size="small"
+            style={{ marginBottom: 16 }}
+          >
+            <div ref={logRef} style={{ maxHeight: 540, overflow: 'auto',paddingTop:8 }}>
+              <Timeline
+                mode="left"
+                items={renderedTimeline.map((m) => ({
+                  label: formatTime(m.timestamp),
+                  color:
+                    m.type === 'toolUsed'
+                      ? 'blue'
+                      : m.type === 'actionLog'
+                      ? 'gray'
+                      : m.type === 'planUpdate' || m.type === 'newPlanStep'
+                      ? 'purple'
+                      : 'green',
+                  children: (
+                    <div>
+                      <Tag>{m.type}</Tag>
+                      <Typography.Text>{summarizeEvent(m)}</Typography.Text>
+                    </div>
+                  ),
+                }))}
+              />
+            </div>
+            {renderedTimeline.length === 0 ? (
+              <Empty
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description={
+                  running
+                    ? '尚未收到匹配筛选条件的事件'
+                    : '暂无日志事件'
+                }
+              />
+            ) : null}
+          </Card>
+        </Col>
+
+        <Col xs={24} md={12}>
+          <Card
+            title={(
+              <Space size={6}>
+                <SafetyCertificateOutlined />
+                <span>检测报告</span>
+              </Space>
+            )}
             size="small"
             extra={
               reduced.finalResult ? (
@@ -717,7 +774,11 @@ export default function TaskDetailPage() {
             ) : (
               <Empty
                 image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description={running ? '任务尚未完成' : '无结果数据'}
+                description={
+                  running
+                    ? '任务进行中，检查报告将在完成后自动生成。可先查看左侧执行计划与实时日志。'
+                    : '暂未生成检查报告数据。可能任务被终止或未产出结果，请检查任务参数后重试。'
+                }
               />
             )}
           </Card>
