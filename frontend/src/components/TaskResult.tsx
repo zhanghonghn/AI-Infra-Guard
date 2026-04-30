@@ -1,15 +1,19 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
+  Button,
   Card,
   Col,
   Collapse,
   Descriptions,
+  Divider,
+  Drawer,
   Empty,
   Image,
   Input,
   Progress,
   Row,
+  Select,
   Space,
   Statistic,
   Table,
@@ -17,7 +21,11 @@ import {
   Typography,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
+import { marked } from 'marked';
+import DOMPurify from 'dompurify';
 import dayjs from 'dayjs';
+import { listFindings, updateFindingStatus } from '@/api/findings';
+import type { Finding, FindingStatus } from '@/types/finding';
 
 const { Paragraph, Text, Title } = Typography;
 
@@ -74,11 +82,12 @@ function SeverityTag({ value }: { value: unknown }) {
   );
 }
 
-/** Render a string as paragraph text preserving newlines. Markdown source
- *  is shown as-is — we don't bring in a markdown parser to keep the
- *  bundle lean, but the surrounding cards + monospaced code blocks make
- *  it readable enough. */
-function MarkdownLite({
+/** Render a string as parsed Markdown (HTML). Content is sanitized with
+ *  DOMPurify before injection so XSS from untrusted input is prevented.
+ *  The source is our own server-generated text, but we sanitize anyway for
+ *  defence-in-depth. A minimal inline stylesheet covers headings, tables,
+ *  code blocks, and blockquotes without pulling in external CSS. */
+function MarkdownRender({
   text,
   maxHeight,
 }: {
@@ -86,24 +95,35 @@ function MarkdownLite({
   maxHeight?: number;
 }) {
   if (!text) return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} />;
+
+  const rawHtml = marked.parse(text, { async: false });
+  const safeHtml = DOMPurify.sanitize(rawHtml, { USE_PROFILES: { html: true } });
+
   return (
     <div
+      // eslint-disable-next-line react/no-danger
+      dangerouslySetInnerHTML={{ __html: safeHtml }}
       style={{
-        whiteSpace: 'pre-wrap',
-        wordBreak: 'break-word',
-        background: '#fafafa',
-        border: '1px solid #f0f0f0',
-        borderRadius: 4,
-        padding: 12,
         maxHeight,
         overflow: maxHeight ? 'auto' : undefined,
         fontSize: 13,
-        lineHeight: 1.6,
+        lineHeight: 1.7,
+        color: 'inherit',
       }}
-    >
-      {text}
-    </div>
+      className="md-render"
+    />
   );
+}
+
+/** @deprecated Use MarkdownRender */
+function MarkdownLite({
+  text,
+  maxHeight,
+}: {
+  text: string;
+  maxHeight?: number;
+}) {
+  return <MarkdownRender text={text} maxHeight={maxHeight} />;
 }
 
 function RawJson({
@@ -1429,14 +1449,164 @@ function RedTeamCaseDetail({ c }: { c: RedTeamCase }) {
 /* Garak-Scan                                                          */
 /* ------------------------------------------------------------------ */
 
-function GarakScanResult({ result }: { result: Record<string, unknown> }) {
+const FINDING_STATUS_OPTIONS: { value: FindingStatus; label: string }[] = [
+  { value: 'open', label: 'Open' },
+  { value: 'fixed', label: '已修复' },
+  { value: 'accepted_risk', label: '接受风险' },
+  { value: 'false_positive', label: '误报' },
+];
+
+function GarakScanResult({
+  result,
+  scanId,
+}: {
+  result: Record<string, unknown>;
+  scanId?: string;
+}) {
   const total = (result.total as number | undefined) ?? 0;
-  const bySeverity = (result.by_severity as Record<string, number> | undefined) ?? {};
+  const bySeverity =
+    (result.by_severity as Record<string, number> | undefined) ?? {};
   const garakVersion = (result.garak_version as string | undefined) ?? '';
   const adapterVersion = (result.adapter_version as string | undefined) ?? '';
   const reportUrl = (result.report_url as string | undefined) ?? '';
   const reportFilename = (result.report_filename as string | undefined) ?? '';
-  const scanId = (result.scan_id as string | undefined) ?? '';
+  const scanIdField =
+    (result.scan_id as string | undefined) ?? scanId ?? '';
+  const reportMarkdown = (result.report_markdown as string | undefined) ?? '';
+
+  // Findings loaded either from the result payload or via API.
+  const [findings, setFindings] = useState<Finding[]>(() => {
+    const embedded =
+      (result.findings as Finding[] | undefined) ??
+      (result.results as Finding[] | undefined) ??
+      [];
+    return Array.isArray(embedded) ? (embedded as Finding[]) : [];
+  });
+  const [findingsLoading, setFindingsLoading] = useState(false);
+  const [activeFinding, setActiveFinding] = useState<Finding | null>(null);
+  const [keyword, setKeyword] = useState('');
+  const [severityFilter, setSeverityFilter] = useState('');
+
+  // If we have a scanId but no embedded findings, try fetching from API.
+  useEffect(() => {
+    const sid = scanIdField;
+    if (!sid || findings.length > 0) return;
+    setFindingsLoading(true);
+    listFindings(sid)
+      .then((r) => {
+        if (r?.findings?.length) setFindings(r.findings);
+      })
+      .catch(() => undefined)
+      .finally(() => setFindingsLoading(false));
+    // `findings` is intentionally omitted: we only want to trigger a fetch when
+    // scanIdField changes, not when findings changes (that would cause a loop).
+    // `setFindings` and `setFindingsLoading` are React state setters — guaranteed
+    // stable references by React and safe to omit from the dep array.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scanIdField]);
+
+  const filteredFindings = useMemo<Finding[]>(() => {
+    return findings.filter((f) => {
+      if (severityFilter && f.severity !== severityFilter) return false;
+      if (keyword) {
+        const q = keyword.toLowerCase();
+        const hay = [
+          f.evidence_summary,
+          f.fix_recommendation,
+          f.risk_type,
+          f.risk_type_display,
+          f.asset,
+          f.garak_probe_id,
+        ]
+          .join(' ')
+          .toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [findings, severityFilter, keyword]);
+
+  const onUpdateStatus = async (f: Finding, next: FindingStatus) => {
+    try {
+      await updateFindingStatus(f.finding_id, next);
+      setFindings((prev) =>
+        prev.map((x) =>
+          x.finding_id === f.finding_id ? { ...x, status: next } : x,
+        ),
+      );
+      if (activeFinding?.finding_id === f.finding_id) {
+        setActiveFinding({ ...activeFinding, status: next });
+      }
+    } catch {
+      /* handled */
+    }
+  };
+
+  const findingColumns: ColumnsType<Finding> = [
+    {
+      title: '严重度',
+      dataIndex: 'severity',
+      key: 'severity',
+      width: 100,
+      sorter: (a, b) => severityRank(a.severity) - severityRank(b.severity),
+      render: (s: string) => (
+        <Tag color={SEVERITY_COLORS[s] ?? 'default'}>{s.toUpperCase()}</Tag>
+      ),
+    },
+    {
+      title: '风险类型',
+      dataIndex: 'risk_type_display',
+      key: 'risk_type_display',
+      width: 150,
+      render: (v: string, r) => v || r.risk_type,
+    },
+    {
+      title: '证据摘要',
+      dataIndex: 'evidence_summary',
+      key: 'evidence_summary',
+      ellipsis: true,
+    },
+    {
+      title: '置信度',
+      dataIndex: 'confidence',
+      key: 'confidence',
+      width: 100,
+      sorter: (a, b) => a.confidence - b.confidence,
+      render: (n: number) => (
+        <Progress
+          percent={Math.round(n)}
+          size="small"
+          showInfo
+          format={(v) => `${v}%`}
+        />
+      ),
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      key: 'status',
+      width: 140,
+      render: (s: FindingStatus, r) => (
+        <Select
+          size="small"
+          value={s}
+          options={FINDING_STATUS_OPTIONS}
+          style={{ width: 120 }}
+          onChange={(v) => onUpdateStatus(r, v)}
+        />
+      ),
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 80,
+      render: (_v, r) => (
+        <Button type="link" size="small" onClick={() => setActiveFinding(r)}>
+          详情
+        </Button>
+      ),
+    },
+  ];
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
@@ -1468,12 +1638,12 @@ function GarakScanResult({ result }: { result: Record<string, unknown> }) {
         ))}
       </Row>
 
-      {(garakVersion || adapterVersion || scanId) ? (
+      {garakVersion || adapterVersion || scanIdField ? (
         <Card size="small">
           <Descriptions size="small" column={{ xs: 1, sm: 2, md: 3 }}>
-            {scanId ? (
+            {scanIdField ? (
               <Descriptions.Item label="扫描 ID">
-                <Text code>{scanId}</Text>
+                <Text code>{scanIdField}</Text>
               </Descriptions.Item>
             ) : null}
             {garakVersion ? (
@@ -1503,12 +1673,293 @@ function GarakScanResult({ result }: { result: Record<string, unknown> }) {
         />
       ) : null}
 
-      <Alert
-        type="success"
-        showIcon
-        message="Garak 评估报告"
-        description="详细的 finding 列表与基线对比可在「评估报告」页面查看（页头按钮）。"
-      />
+      {/* Inline findings table */}
+      <Card
+        size="small"
+        title={`评估发现 (${findings.length})`}
+        bodyStyle={{ padding: 0 }}
+        extra={
+          <Space size={8}>
+            <Input.Search
+              size="small"
+              placeholder="搜索证据 / 资产 / probe"
+              allowClear
+              style={{ width: 200 }}
+              value={keyword}
+              onChange={(e) => setKeyword(e.target.value)}
+            />
+            <Select
+              size="small"
+              placeholder="严重度"
+              allowClear
+              style={{ width: 100 }}
+              value={severityFilter || undefined}
+              onChange={(v) => setSeverityFilter(v || '')}
+              options={(['critical', 'high', 'medium', 'low'] as const).map(
+                (v) => ({ value: v, label: v.toUpperCase() }),
+              )}
+            />
+          </Space>
+        }
+      >
+        {findings.length === 0 && !findingsLoading ? (
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description="暂无评估发现"
+            style={{ padding: 16 }}
+          />
+        ) : (
+          <Table
+            rowKey="finding_id"
+            size="small"
+            loading={findingsLoading}
+            columns={findingColumns}
+            dataSource={filteredFindings}
+            pagination={{ pageSize: 10, showSizeChanger: false }}
+          />
+        )}
+      </Card>
+
+      {/* Markdown report inline */}
+      {reportMarkdown ? (
+        <Card size="small" title="Markdown 详细报告">
+          <Collapse
+            ghost
+            size="small"
+            defaultActiveKey={['report']}
+            items={[
+              {
+                key: 'report',
+                label: '查看完整报告',
+                children: (
+                  <MarkdownLite text={reportMarkdown} maxHeight={600} />
+                ),
+              },
+            ]}
+          />
+        </Card>
+      ) : null}
+
+      {/* Finding detail drawer */}
+      <Drawer
+        title={
+          activeFinding
+            ? `${activeFinding.severity.toUpperCase()} · ${activeFinding.risk_type_display || activeFinding.risk_type}`
+            : ''
+        }
+        width={560}
+        open={!!activeFinding}
+        onClose={() => setActiveFinding(null)}
+      >
+        {activeFinding ? (
+          <GarakFindingDetail
+            finding={activeFinding}
+            onStatusChange={(next) => onUpdateStatus(activeFinding, next)}
+          />
+        ) : null}
+      </Drawer>
+    </Space>
+  );
+}
+
+/** Typed shape of `evidence_detail` produced by garak Normalizer */
+interface GarakEvidenceDetail {
+  probe_id?: string;
+  detector_name?: string;
+  total_attempts?: number;
+  failures?: number;
+  pass_rate?: number;
+  fail_examples?: Array<{ prompt?: string; response?: string; passed?: boolean }>;
+}
+
+function GarakFindingDetail({
+  finding,
+  onStatusChange,
+}: {
+  finding: Finding;
+  onStatusChange: (s: FindingStatus) => void;
+}) {
+  const detail = finding.evidence_detail as GarakEvidenceDetail | undefined;
+
+  return (
+    <Space direction="vertical" size={12} style={{ width: '100%' }}>
+      {/* Basic metadata */}
+      <Descriptions size="small" column={1} bordered>
+        <Descriptions.Item label="严重度">
+          <Tag color={SEVERITY_COLORS[finding.severity] ?? 'default'}>
+            {finding.severity.toUpperCase()}
+          </Tag>
+        </Descriptions.Item>
+        <Descriptions.Item label="风险类型">
+          {finding.risk_type_display || finding.risk_type}
+        </Descriptions.Item>
+        {finding.asset ? (
+          <Descriptions.Item label="资产">{finding.asset}</Descriptions.Item>
+        ) : null}
+        {finding.garak_probe_id ? (
+          <Descriptions.Item label="Probe">
+            <Typography.Text code>{finding.garak_probe_id}</Typography.Text>
+          </Descriptions.Item>
+        ) : null}
+        {finding.garak_detector_name ? (
+          <Descriptions.Item label="Detector">
+            <Typography.Text code>{finding.garak_detector_name}</Typography.Text>
+          </Descriptions.Item>
+        ) : null}
+        <Descriptions.Item label="置信度">
+          <Progress
+            percent={Math.round(finding.confidence)}
+            size="small"
+            style={{ maxWidth: 200 }}
+          />
+        </Descriptions.Item>
+        <Descriptions.Item label="状态">
+          <Select
+            size="small"
+            value={finding.status}
+            options={FINDING_STATUS_OPTIONS}
+            style={{ width: 150 }}
+            onChange={onStatusChange}
+          />
+        </Descriptions.Item>
+      </Descriptions>
+
+      {/* Evidence summary */}
+      {finding.evidence_summary ? (
+        <Alert
+          type="warning"
+          showIcon
+          message="证据摘要"
+          description={
+            <span style={{ whiteSpace: 'pre-wrap' }}>
+              {finding.evidence_summary}
+            </span>
+          }
+        />
+      ) : null}
+
+      {/* Fix recommendation */}
+      {finding.fix_recommendation ? (
+        <Alert
+          type="success"
+          showIcon
+          message="修复建议"
+          description={
+            <span style={{ whiteSpace: 'pre-wrap' }}>
+              {finding.fix_recommendation}
+            </span>
+          }
+        />
+      ) : null}
+
+      {/* Probe statistics */}
+      {detail ? (
+        <>
+          <Divider style={{ margin: '4px 0' }}>探针统计</Divider>
+          <Row gutter={[12, 12]}>
+            <Col xs={12} sm={6}>
+              <Statistic
+                title="总测试次数"
+                value={detail.total_attempts ?? '-'}
+                valueStyle={{ fontSize: 18 }}
+              />
+            </Col>
+            <Col xs={12} sm={6}>
+              <Statistic
+                title="失败次数"
+                value={detail.failures ?? '-'}
+                valueStyle={{
+                  fontSize: 18,
+                  color: (detail.failures ?? 0) > 0 ? '#ff4d4f' : undefined,
+                }}
+              />
+            </Col>
+            <Col xs={12} sm={6}>
+              <Statistic
+                title="通过率"
+                value={
+                  detail.pass_rate !== undefined
+                    ? `${(detail.pass_rate * 100).toFixed(1)}%`
+                    : '-'
+                }
+                valueStyle={{
+                  fontSize: 18,
+                  color:
+                    detail.pass_rate !== undefined
+                      ? detail.pass_rate >= 0.9
+                        ? '#52c41a'
+                        : detail.pass_rate >= 0.6
+                        ? '#faad14'
+                        : '#ff4d4f'
+                      : undefined,
+                }}
+              />
+            </Col>
+          </Row>
+
+          {/* Fail examples (probe/response conversations) */}
+          {detail.fail_examples && detail.fail_examples.length > 0 ? (
+            <Card
+              size="small"
+              title={`失败样本 (${detail.fail_examples.length} 条)`}
+              type="inner"
+            >
+              <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                {detail.fail_examples.map((ex, i) => (
+                  <Card
+                    key={i}
+                    size="small"
+                    type="inner"
+                    bodyStyle={{ padding: 8 }}
+                    title={
+                      <Space size={6}>
+                        <Tag color="red">样本 #{i + 1}</Tag>
+                      </Space>
+                    }
+                  >
+                    {ex.prompt ? (
+                      <div style={{ marginBottom: 8 }}>
+                        <Tag color="blue" style={{ marginBottom: 4 }}>攻击 Prompt</Tag>
+                        <div
+                          style={{
+                            background: '#f0f5ff',
+                            border: '1px solid #adc6ff',
+                            borderRadius: 4,
+                            padding: '6px 10px',
+                            whiteSpace: 'pre-wrap',
+                            wordBreak: 'break-word',
+                            fontSize: 12,
+                          }}
+                        >
+                          {ex.prompt}
+                        </div>
+                      </div>
+                    ) : null}
+                    {ex.response ? (
+                      <div>
+                        <Tag color="orange" style={{ marginBottom: 4 }}>模型响应</Tag>
+                        <div
+                          style={{
+                            background: '#fff7e6',
+                            border: '1px solid #ffd591',
+                            borderRadius: 4,
+                            padding: '6px 10px',
+                            whiteSpace: 'pre-wrap',
+                            wordBreak: 'break-word',
+                            fontSize: 12,
+                          }}
+                        >
+                          {ex.response}
+                        </div>
+                      </div>
+                    ) : null}
+                  </Card>
+                ))}
+              </Space>
+            </Card>
+          ) : null}
+        </>
+      ) : null}
     </Space>
   );
 }
@@ -1574,6 +2025,8 @@ interface TaskResultProps {
    *  for some adapters. The component handles both. */
   event: Record<string, unknown> | null;
   taskType?: string;
+  /** Optional scan/session ID — used by Garak to display inline findings. */
+  scanId?: string;
 }
 
 /** Human-friendly renderer for a task's final result.
@@ -1581,7 +2034,7 @@ interface TaskResultProps {
  *  Dispatches by taskType. Always finishes with a "原始 JSON" collapse
  *  panel so power users can still inspect everything.
  */
-export default function TaskResult({ event, taskType }: TaskResultProps) {
+export default function TaskResult({ event, taskType, scanId }: TaskResultProps) {
   if (!event) {
     return (
       <Empty
@@ -1641,7 +2094,7 @@ export default function TaskResult({ event, taskType }: TaskResultProps) {
       body = <ModelRedteamResult result={payload} />;
       break;
     case 'garak_scan':
-      body = <GarakScanResult result={payload} />;
+      body = <GarakScanResult result={payload} scanId={scanId} />;
       break;
     default:
       body = <GenericResult result={payload} />;

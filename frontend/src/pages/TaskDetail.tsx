@@ -504,7 +504,82 @@ export default function TaskDetailPage() {
       ) : null}
 
       <Row gutter={16}>
-        <Col xs={24} md={10}>
+        <Col xs={24} md={12}>
+          <Card
+            title={
+              <Space wrap>
+                <span>实时日志</span>
+                {running ? (
+                  <Badge
+                    status={sse.connected ? 'success' : 'default'}
+                    text={sse.connected ? 'SSE 已连接' : '等待连接'}
+                  />
+                ) : null}
+                <Tag>{renderedTimeline.length} 条</Tag>
+              </Space>
+            }
+            extra={
+              <Space size={8} wrap>
+                <Checkbox.Group
+                  options={LOG_TYPE_OPTIONS}
+                  value={enabledTypes}
+                  onChange={(v) => setEnabledTypes(v as string[])}
+                />
+                <Checkbox
+                  checked={autoScroll}
+                  onChange={(e) => setAutoScroll(e.target.checked)}
+                >
+                  自动滚动
+                </Checkbox>
+                <Button
+                  size="small"
+                  type={paused ? 'primary' : 'default'}
+                  onClick={() => setPaused((p) => !p)}
+                  disabled={!running}
+                >
+                  {paused ? '继续' : '暂停'}
+                </Button>
+              </Space>
+            }
+            size="small"
+            style={{ marginBottom: 16 }}
+          >
+            <div ref={logRef} style={{ maxHeight: 540, overflow: 'auto' }}>
+              <Timeline
+                mode="left"
+                items={renderedTimeline.map((m) => ({
+                  label: formatTime(m.timestamp),
+                  color:
+                    m.type === 'toolUsed'
+                      ? 'blue'
+                      : m.type === 'actionLog'
+                      ? 'gray'
+                      : m.type === 'planUpdate' || m.type === 'newPlanStep'
+                      ? 'purple'
+                      : 'green',
+                  children: (
+                    <div>
+                      <Tag>{m.type}</Tag>
+                      <Typography.Text>{summarizeEvent(m)}</Typography.Text>
+                    </div>
+                  ),
+                }))}
+              />
+            </div>
+            {renderedTimeline.length === 0 ? (
+              <Empty
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description={
+                  running
+                    ? '尚未收到匹配筛选条件的事件'
+                    : '暂无日志事件'
+                }
+              />
+            ) : null}
+          </Card>
+        </Col>
+
+        <Col xs={24} md={12}>
           <Card title="任务参数" size="small" style={{ marginBottom: 16 }}>
             <Descriptions column={1} size="small">
               <Descriptions.Item label="语言">
@@ -585,6 +660,7 @@ export default function TaskDetailPage() {
               </Space>
             }
             size="small"
+            style={{ marginBottom: 16 }}
           >
             {reduced.steps.length === 0 ? (
               <Empty
@@ -608,81 +684,6 @@ export default function TaskDetailPage() {
                 showIcon
                 style={{ marginTop: 12 }}
                 message={reduced.liveStatus}
-              />
-            ) : null}
-          </Card>
-        </Col>
-
-        <Col xs={24} md={14}>
-          <Card
-            title={
-              <Space wrap>
-                <span>实时日志</span>
-                {running ? (
-                  <Badge
-                    status={sse.connected ? 'success' : 'default'}
-                    text={sse.connected ? 'SSE 已连接' : '等待连接'}
-                  />
-                ) : null}
-                <Tag>{renderedTimeline.length} 条</Tag>
-              </Space>
-            }
-            extra={
-              <Space size={8} wrap>
-                <Checkbox.Group
-                  options={LOG_TYPE_OPTIONS}
-                  value={enabledTypes}
-                  onChange={(v) => setEnabledTypes(v as string[])}
-                />
-                <Checkbox
-                  checked={autoScroll}
-                  onChange={(e) => setAutoScroll(e.target.checked)}
-                >
-                  自动滚动
-                </Checkbox>
-                <Button
-                  size="small"
-                  type={paused ? 'primary' : 'default'}
-                  onClick={() => setPaused((p) => !p)}
-                  disabled={!running}
-                >
-                  {paused ? '继续' : '暂停'}
-                </Button>
-              </Space>
-            }
-            size="small"
-            style={{ marginBottom: 16 }}
-          >
-            <div ref={logRef} style={{ maxHeight: 480, overflow: 'auto' }}>
-              <Timeline
-                mode="left"
-                items={renderedTimeline.map((m) => ({
-                  label: formatTime(m.timestamp),
-                  color:
-                    m.type === 'toolUsed'
-                      ? 'blue'
-                      : m.type === 'actionLog'
-                      ? 'gray'
-                      : m.type === 'planUpdate' || m.type === 'newPlanStep'
-                      ? 'purple'
-                      : 'green',
-                  children: (
-                    <div>
-                      <Tag>{m.type}</Tag>
-                      <Typography.Text>{summarizeEvent(m)}</Typography.Text>
-                    </div>
-                  ),
-                }))}
-              />
-            </div>
-            {renderedTimeline.length === 0 ? (
-              <Empty
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description={
-                  running
-                    ? '尚未收到匹配筛选条件的事件'
-                    : '暂无日志事件'
-                }
               />
             ) : null}
           </Card>
@@ -711,6 +712,7 @@ export default function TaskDetailPage() {
               <TaskResult
                 event={reduced.finalResult}
                 taskType={detail?.taskType}
+                scanId={sessionId}
               />
             ) : (
               <Empty
