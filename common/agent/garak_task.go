@@ -42,13 +42,14 @@ const TaskTypeGarakScan = "Garak-Scan"
 
 // GarakScanParams 前端/服务端下发的任务请求参数
 type GarakScanParams struct {
-	ModelProvider string `json:"model_provider"` // openai / azure / ollama / custom
-	ModelName     string `json:"model_name"`
-	APIKey        string `json:"api_key,omitempty"`   // 明文 key（测试/开发）
-	APIKeyRef     string `json:"api_key_ref,omitempty"` // 未来：凭证 ID 引用
-	BaseURL       string `json:"base_url,omitempty"`
-	ScanTarget    string `json:"scan_target"` // pre_release / quick_check / jailbreak_focus
-	Intensity     string `json:"intensity"`   // fast / standard / deep
+	ModelProvider string   `json:"model_provider"` // openai / azure / ollama / custom
+	ModelName     string   `json:"model_name"`
+	APIKey        string   `json:"api_key,omitempty"`     // 明文 key（测试/开发）
+	APIKeyRef     string   `json:"api_key_ref,omitempty"` // 未来：凭证 ID 引用
+	BaseURL       string   `json:"base_url,omitempty"`
+	ScanTarget    string   `json:"scan_target"`  // pre_release / quick_check / jailbreak_focus
+	Intensity     string   `json:"intensity"`    // fast / standard / deep
+	ProbeGroups   []string `json:"probe_groups"` // 自定义探针列表，非空时覆盖 intensity 策略
 }
 
 // GarakTask 实现 TaskInterface，是 Garak-Scan 的 Agent 端处理器。
@@ -130,10 +131,18 @@ func (g *GarakTask) Execute(ctx context.Context, request TaskRequest, callbacks 
 	callbacks.StepStatusUpdateCallback(step2, statusID2, AgentStatusRunning, "扫描中", "正在运行 Garak 安全探针...")
 
 	// 构建 Python 命令行参数
-	probeGroups, err := resolveProbeGroups(params.Intensity, policyDir)
-	if err != nil {
-		gologger.Warnf("加载策略失败，使用 fast 默认探针集: %v", err)
-		probeGroups = defaultFastProbes
+	// 若前端传入了自定义探针列表，直接使用；否则按 intensity 策略解析
+	var probeGroups []string
+	if len(params.ProbeGroups) > 0 {
+		probeGroups = normalizeProbeGroups(params.ProbeGroups)
+		gologger.Infof("使用自定义探针列表，共 %d 个探针", len(probeGroups))
+	} else {
+		var err error
+		probeGroups, err = resolveProbeGroups(params.Intensity, policyDir)
+		if err != nil {
+			gologger.Warnf("加载策略失败，使用 fast 默认探针集: %v", err)
+			probeGroups = defaultFastProbes
+		}
 	}
 	gologger.Infof("******************");
 	gologger.Infof("Garak 扫描探针列表: %s", strings.Join(probeGroups, ","))
