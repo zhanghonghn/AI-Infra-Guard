@@ -81,9 +81,161 @@ const INTENSITY_OPTIONS = [
   { value: 'deep', label: 'Deep (~90min)' },
 ];
 
+// Garak 支持的模型提供商
 const GARAK_PROVIDERS = [
-  { value: 'openai', label: 'openai' },
-  { value: 'huggingface', label: 'huggingface' },
+  { value: 'openai',                          label: 'OpenAI (API)' },
+  { value: 'azure',                           label: 'Azure OpenAI' },
+  { value: 'huggingface',                     label: 'Hugging Face (本地 Pipeline)' },
+  { value: 'huggingface.InferenceAPI',        label: 'Hugging Face Inference API' },
+  { value: 'huggingface.InferenceEndpoint',   label: 'Hugging Face Private Endpoint' },
+  { value: 'ollama',                          label: 'Ollama (本地)' },
+  { value: 'groq',                            label: 'Groq' },
+  { value: 'cohere',                          label: 'Cohere' },
+  { value: 'nim',                             label: 'NVIDIA NIM' },
+  { value: 'replicate',                       label: 'Replicate' },
+  { value: 'rest.RestGenerator',              label: 'REST (自定义端点)' },
+  { value: 'ggml',                            label: 'ggml / llama.cpp' },
+];
+
+// 每个 provider 下的常用模型名称建议
+const PROVIDER_MODEL_SUGGESTIONS: Record<string, string[]> = {
+  openai: [
+    'gpt-4o',
+    'gpt-4o-mini',
+    'gpt-4-turbo',
+    'gpt-4',
+    'gpt-3.5-turbo',
+    'gpt-3.5-turbo-0125',
+  ],
+  azure: [
+    'gpt-4o',
+    'gpt-4',
+    'gpt-35-turbo',
+  ],
+  'huggingface': [
+    'gpt2',
+    'meta-llama/Llama-2-7b-chat-hf',
+    'mistralai/Mistral-7B-Instruct-v0.2',
+    'google/gemma-7b-it',
+  ],
+  'huggingface.InferenceAPI': [
+    'mosaicml/mpt-7b-instruct',
+    'tiiuae/falcon-7b-instruct',
+    'mistralai/Mixtral-8x7B-Instruct-v0.1',
+  ],
+  'huggingface.InferenceEndpoint': [],
+  ollama: [
+    'llama3',
+    'llama3:8b',
+    'llama3:70b',
+    'mistral',
+    'qwen2:7b',
+    'gemma2:9b',
+    'phi3',
+    'deepseek-r1:7b',
+  ],
+  groq: [
+    'llama3-8b-8192',
+    'llama3-70b-8192',
+    'mixtral-8x7b-32768',
+    'gemma-7b-it',
+  ],
+  cohere: [
+    'command',
+    'command-r',
+    'command-r-plus',
+    'command-light',
+  ],
+  nim: [
+    'meta/llama-3.1-8b-instruct',
+    'meta/llama-3.1-70b-instruct',
+    'mistralai/mistral-7b-instruct-v0.3',
+    'google/gemma-7b',
+  ],
+  'nim.NVOpenAICompletion': [
+    'bigcode/starcoder2-15b',
+    'mistralai/codestral-22b-instruct-v0.1',
+  ],
+  replicate: [],
+  'rest.RestGenerator': [],
+  ggml: [],
+};
+
+// Garak 可用探针列表，按攻击类别分组
+const GARAK_PROBE_OPTIONS = [
+  {
+    label: 'DAN 越狱攻击',
+    options: [
+      { value: 'dan.Dan_11_0', label: 'dan.Dan_11_0 — DAN 11.0' },
+      { value: 'dan.Dan_10_0', label: 'dan.Dan_10_0 — DAN 10.0' },
+      { value: 'dan.Dan_9_0',  label: 'dan.Dan_9_0 — DAN 9.0' },
+      { value: 'dan.Dan_8_0',  label: 'dan.Dan_8_0 — DAN 8.0' },
+      { value: 'dan.Dan_7_0',  label: 'dan.Dan_7_0 — DAN 7.0' },
+      { value: 'dan.DUDE',     label: 'dan.DUDE — DUDE' },
+    ],
+  },
+  {
+    label: '编码注入',
+    options: [
+      { value: 'encoding.InjectBase64',  label: 'encoding.InjectBase64 — Base64 注入' },
+      { value: 'encoding.InjectHex',     label: 'encoding.InjectHex — Hex 注入' },
+      { value: 'encoding.InjectAscii85', label: 'encoding.InjectAscii85 — Ascii85 注入' },
+      { value: 'encoding.InjectBraille', label: 'encoding.InjectBraille — 盲文注入' },
+      { value: 'encoding.InjectMorse',   label: 'encoding.InjectMorse — 摩斯码注入' },
+    ],
+  },
+  {
+    label: '提示词注入',
+    options: [
+      { value: 'promptinject.HijackHateHumans', label: 'promptinject.HijackHateHumans — 仇恨人类劫持' },
+      { value: 'promptinject.HijackKillHumans', label: 'promptinject.HijackKillHumans — 杀害人类劫持' },
+    ],
+  },
+  {
+    label: '内容安全',
+    options: [
+      { value: 'lmrc.Deadnaming',      label: 'lmrc.Deadnaming — 死名' },
+      { value: 'lmrc.Profanity',       label: 'lmrc.Profanity — 脏话' },
+      { value: 'lmrc.QuackMedicine',   label: 'lmrc.QuackMedicine — 假医疗' },
+      { value: 'lmrc.Sexualisation',   label: 'lmrc.Sexualisation — 性化内容' },
+      { value: 'lmrc.Slurs',           label: 'lmrc.Slurs — 歧视词' },
+    ],
+  },
+  {
+    label: '可靠性',
+    options: [
+      { value: 'snowball.Snowball',                          label: 'snowball.Snowball — 雪球效应' },
+      { value: 'packagehallucination.Python',                label: 'packagehallucination.Python — Python 包幻觉' },
+      { value: 'packagehallucination.JavaScript',            label: 'packagehallucination.JavaScript — JS 包幻觉' },
+    ],
+  },
+];
+
+// 大模型安全体检可用攻击方法（对应 AIG-PromptSecurity 攻击类名）
+const ATTACK_TECHNIQUE_OPTIONS = [
+  { value: 'Raw',            label: 'Raw — 原始提示（无变换）' },
+  { value: 'CharacterSplit', label: 'CharacterSplit — 字符拆分' },
+  { value: 'LongText',       label: 'LongText — 长文本包裹' },
+  { value: 'AsciiDrawing',   label: 'AsciiDrawing — ASCII 图形混淆' },
+  { value: 'LanternRiddle',  label: 'LanternRiddle — 灯谜式混淆' },
+  { value: 'AcrosticPoem',   label: 'AcrosticPoem — 藏头诗混淆' },
+  { value: 'StrataSword',    label: 'StrataSword — StrataSword 多层攻击' },
+  { value: 'Contradictory',  label: 'Contradictory — 矛盾指令' },
+  { value: 'Opposing',       label: 'Opposing — 对立角色' },
+  { value: 'ScriptTemplate', label: 'ScriptTemplate — 脚本模板注入' },
+  { value: 'Shuffle',        label: 'Shuffle — 句子乱序' },
+  { value: 'CodeAttack',     label: 'CodeAttack — 代码包裹攻击' },
+  { value: 'DRAttack',       label: 'DRAttack — 双重角色攻击' },
+  { value: 'CaesarCipher',   label: 'CaesarCipher — 凯撒密码' },
+  { value: 'MirrorText',     label: 'MirrorText — 镜像文本' },
+  { value: 'AsciiSmuggling', label: 'AsciiSmuggling — ASCII 走私' },
+  { value: 'Leetspeak',      label: 'Leetspeak — 1337 语言' },
+  { value: 'AffineCipher',   label: 'AffineCipher — 仿射密码' },
+  { value: 'Zalgo',          label: 'Zalgo — Zalgo 文本' },
+  { value: 'A1Z26',          label: 'A1Z26 — A1Z26 编码' },
+  { value: 'Stego',          label: 'Stego — 隐写术' },
+  { value: 'Aurebesh',       label: 'Aurebesh — Aurebesh 星战字符' },
+  { value: 'Vaporwave',      label: 'Vaporwave — 全角字符' },
 ];
 
 // Hard-coded fallbacks used only when the evaluations API fails or is empty,
@@ -222,11 +374,13 @@ function buildInitialValues(
         dataFile: (ds.dataFile as string[]) || ['JailBench-Tiny'],
         numPrompts: (ds.numPrompts as number) ?? 100,
         randomSeed: (ds.randomSeed as number) ?? 42,
+        techniques: (params.techniques as string[]) || [],
         prompt: clone?.content || '',
         language,
       };
     }
-    case 'Garak-Scan':
+    case 'Garak-Scan': {
+      const hasCustomProbes = Array.isArray(params.probe_groups) && (params.probe_groups as string[]).length > 0;
       return {
         useSystemModel: !!(params.model_id as string),
         system_model_id: (params.model_id as string) || undefined,
@@ -234,9 +388,12 @@ function buildInitialValues(
         model: (params.model as string) || clone?.content || '',
         api_key: params.api_key,
         base_url: params.base_url,
+        probeMode: hasCustomProbes ? 'custom' : 'preset',
         intensity: (params.intensity as string) || 'fast',
+        probe_groups: (params.probe_groups as string[]) || [],
         language,
       };
+    }
   }
 }
 
@@ -271,6 +428,17 @@ export default function TaskCreate() {
   // Garak-Scan: whether to use a system-configured model instead of manual creds.
   const [garakUseSystemModel, setGarakUseSystemModel] = useState<boolean>(
     () => !!(cloneRef.current?.params as Record<string, unknown>)?.model_id,
+  );
+  // Garak-Scan: probe configuration mode — 'preset' uses intensity, 'custom' uses probe_groups.
+  const [garakProbeMode, setGarakProbeMode] = useState<'preset' | 'custom'>(() => {
+    const p = cloneRef.current?.params as Record<string, unknown> | undefined;
+    return Array.isArray(p?.probe_groups) && (p!.probe_groups as string[]).length > 0
+      ? 'custom'
+      : 'preset';
+  });
+  // Garak-Scan: currently selected provider (to drive model name suggestions).
+  const [garakProvider, setGarakProvider] = useState<string>(
+    () => (cloneRef.current?.params as Record<string, unknown>)?.provider as string || 'openai',
   );
   // Live-parsed AI-Infra-Scan target preview.
   const [targetPreview, setTargetPreview] = useState<{
@@ -327,8 +495,12 @@ export default function TaskCreate() {
     // Sync Garak system model toggle from initial values.
     if (taskType === 'Garak-Scan') {
       setGarakUseSystemModel(!!(initial.useSystemModel));
+      setGarakProbeMode((initial.probeMode as 'preset' | 'custom') || 'preset');
+      setGarakProvider((initial.provider as string) || 'openai');
     } else {
       setGarakUseSystemModel(false);
+      setGarakProbeMode('preset');
+      setGarakProvider('openai');
     }
     if (useClone) {
       cloneAppliedRef.current = true;
@@ -472,6 +644,9 @@ export default function TaskCreate() {
         base.params = {
           model_id: target,
           eval_model_id: values.eval_model_id,
+          techniques: (values.techniques as string[])?.length
+            ? values.techniques
+            : ['Raw'],
           dataset: {
             dataFile: values.dataFile,
             numPrompts: values.numPrompts ?? 100,
@@ -482,10 +657,17 @@ export default function TaskCreate() {
       }
       case 'Garak-Scan': {
         base.content = (values.model as string) || '';
+        // probeMode: 'preset' → use intensity; 'custom' → use probe_groups
+        const useCustomProbes = garakProbeMode === 'custom';
+        const probeGroups = useCustomProbes
+          ? ((values.probe_groups as string[]) || [])
+          : [];
+        const intensity = useCustomProbes ? '' : ((values.intensity as string) || 'fast');
         if (garakUseSystemModel && values.system_model_id) {
           base.params = {
             model_id: values.system_model_id,
-            intensity: values.intensity || 'fast',
+            intensity,
+            ...(probeGroups.length > 0 ? { probe_groups: probeGroups } : {}),
           };
         } else {
           base.params = {
@@ -493,7 +675,8 @@ export default function TaskCreate() {
             model: values.model,
             api_key: values.api_key,
             base_url: values.base_url,
-            intensity: values.intensity || 'fast',
+            intensity,
+            ...(probeGroups.length > 0 ? { probe_groups: probeGroups } : {}),
           };
         }
         break;
@@ -742,6 +925,21 @@ export default function TaskCreate() {
             <Form.Item name="randomSeed" label="随机种子" initialValue={42}>
               <InputNumber min={0} />
             </Form.Item>
+            <Form.Item
+              name="techniques"
+              label="攻击方法"
+              tooltip="选择对模型施加的攻击变换技术；留空时默认使用 Raw（原始提示）。可多选以组合测试。"
+              initialValue={[]}
+            >
+              <Select
+                mode="multiple"
+                allowClear
+                showSearch
+                optionFilterProp="label"
+                placeholder="默认使用 Raw（原始提示），可选额外攻击方法"
+                options={ATTACK_TECHNIQUE_OPTIONS}
+              />
+            </Form.Item>
             <Form.Item name="prompt" label="自定义 prompt(可选)">
               <Input.TextArea rows={2} />
             </Form.Item>
@@ -750,13 +948,13 @@ export default function TaskCreate() {
       case 'Garak-Scan':
         return (
           <>
-            <Form.Item label="使用系统配置模型">
+            {/* ── 目标模型配置 ── */}
+            <Form.Item label="目标模型来源">
               <Space size={8}>
                 <Switch
                   checked={garakUseSystemModel}
                   onChange={(v) => {
                     setGarakUseSystemModel(v);
-                    // Reset related fields when toggling mode.
                     form.setFieldsValue({
                       system_model_id: undefined,
                       provider: 'openai',
@@ -764,12 +962,13 @@ export default function TaskCreate() {
                       api_key: '',
                       base_url: '',
                     });
+                    setGarakProvider('openai');
                   }}
                 />
                 <Typography.Text type="secondary">
                   {garakUseSystemModel
-                    ? '将从系统模型配置中读取凭证，无需手动填写 API Key'
-                    : '手动填写模型名称与 API Key'}
+                    ? '使用系统已配置的模型（无需手动填写 API Key）'
+                    : '手动指定模型与凭证'}
                 </Typography.Text>
               </Space>
             </Form.Item>
@@ -791,30 +990,120 @@ export default function TaskCreate() {
               <>
                 <Form.Item
                   name="provider"
-                  label="Provider"
-                  rules={[{ required: true }]}
+                  label="模型提供商"
+                  rules={[{ required: true, message: '请选择模型提供商' }]}
                   initialValue="openai"
                 >
-                  <Select options={GARAK_PROVIDERS} />
+                  <Select
+                    showSearch
+                    optionFilterProp="label"
+                    options={GARAK_PROVIDERS}
+                    onChange={(v: string) => {
+                      setGarakProvider(v);
+                      // Clear model name when switching providers to avoid confusion.
+                      form.setFieldsValue({ model: '', base_url: '' });
+                    }}
+                  />
                 </Form.Item>
                 <Form.Item
                   name="model"
-                  label="模型名"
-                  rules={[{ required: true, message: '请填写模型名' }]}
+                  label="模型名称"
+                  rules={[{ required: true, message: '请填写或选择模型名称' }]}
                 >
-                  <Input placeholder="例如 gpt-4o" />
+                  <AutoComplete
+                    options={(PROVIDER_MODEL_SUGGESTIONS[garakProvider] ?? []).map(
+                      (m) => ({ value: m, label: m }),
+                    )}
+                    placeholder={
+                      garakProvider === 'ollama'
+                        ? '例如 llama3:8b'
+                        : garakProvider.startsWith('huggingface')
+                        ? '例如 meta-llama/Llama-2-7b-chat-hf'
+                        : garakProvider === 'ggml'
+                        ? '/path/to/ggml-model.bin'
+                        : '例如 gpt-4o'
+                    }
+                    filterOption={(input, opt) =>
+                      String(opt?.value ?? '').toLowerCase().includes(input.toLowerCase())
+                    }
+                  />
                 </Form.Item>
-                <Form.Item name="api_key" label="API Key">
-                  <Input.Password autoComplete="new-password" />
+                <Form.Item name="api_key" label="API Key(可选)">
+                  <Input.Password
+                    autoComplete="new-password"
+                    placeholder={
+                      garakProvider === 'ollama' || garakProvider === 'ggml'
+                        ? '本地模型无需填写'
+                        : '请填写对应平台的 API Key'
+                    }
+                  />
                 </Form.Item>
-                <Form.Item name="base_url" label="Base URL(可选)">
-                  <Input placeholder="https://api.openai.com/v1" />
+                <Form.Item
+                  name="base_url"
+                  label="Base URL(可选)"
+                  tooltip="本地部署或反向代理时填写；使用云端 API 通常留空"
+                >
+                  <AutoComplete
+                    options={
+                      garakProvider === 'ollama'
+                        ? [
+                            { value: 'http://localhost:11434/v1', label: 'http://localhost:11434/v1（默认本地）' },
+                          ]
+                        : garakProvider === 'nim'
+                        ? [
+                            { value: 'https://integrate.api.nvidia.com/v1', label: 'NVIDIA NIM Cloud' },
+                          ]
+                        : []
+                    }
+                    placeholder="https://api.example.com/v1"
+                    filterOption={false}
+                  />
                 </Form.Item>
               </>
             )}
-            <Form.Item name="intensity" label="扫描强度" initialValue="fast">
-              <Select options={INTENSITY_OPTIONS} />
+
+            {/* ── 探针配置 ── */}
+            <Form.Item label="探针配置模式">
+              <Segmented
+                value={garakProbeMode}
+                onChange={(v) => {
+                  setGarakProbeMode(v as 'preset' | 'custom');
+                  // Reset the mode-specific fields to avoid stale values.
+                  form.setFieldsValue({ intensity: 'fast', probe_groups: [] });
+                }}
+                options={[
+                  { value: 'preset', label: '⚡ 快速预设' },
+                  { value: 'custom', label: '🔬 自定义探针' },
+                ]}
+              />
             </Form.Item>
+            {garakProbeMode === 'preset' ? (
+              <Form.Item
+                name="intensity"
+                label="扫描强度"
+                initialValue="fast"
+                tooltip="Fast 使用少量高价值探针（约15min）；Standard 覆盖主流攻击面；Deep 使用全量探针。"
+              >
+                <Select options={INTENSITY_OPTIONS} />
+              </Form.Item>
+            ) : (
+              <Form.Item
+                name="probe_groups"
+                label="探针选择"
+                tooltip="选择要运行的 Garak 探针；留空则自动退回 fast 默认探针集。"
+                rules={[{ required: true, message: '自定义模式下请至少选择一个探针' }]}
+                initialValue={[]}
+              >
+                <Select
+                  mode="multiple"
+                  allowClear
+                  showSearch
+                  optionFilterProp="label"
+                  placeholder="选择探针（可多选，支持搜索）"
+                  options={GARAK_PROBE_OPTIONS}
+                />
+              </Form.Item>
+            )}
           </>
         );
     }
