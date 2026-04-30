@@ -6,6 +6,7 @@ import {
   Col,
   Collapse,
   Descriptions,
+  Divider,
   Drawer,
   Empty,
   Image,
@@ -20,6 +21,8 @@ import {
   Typography,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
+import { marked } from 'marked';
+import DOMPurify from 'dompurify';
 import dayjs from 'dayjs';
 import { listFindings, updateFindingStatus } from '@/api/findings';
 import type { Finding, FindingStatus } from '@/types/finding';
@@ -79,11 +82,12 @@ function SeverityTag({ value }: { value: unknown }) {
   );
 }
 
-/** Render a string as paragraph text preserving newlines. Markdown source
- *  is shown as-is — we don't bring in a markdown parser to keep the
- *  bundle lean, but the surrounding cards + monospaced code blocks make
- *  it readable enough. */
-function MarkdownLite({
+/** Render a string as parsed Markdown (HTML). Content is sanitized with
+ *  DOMPurify before injection so XSS from untrusted input is prevented.
+ *  The source is our own server-generated text, but we sanitize anyway for
+ *  defence-in-depth. A minimal inline stylesheet covers headings, tables,
+ *  code blocks, and blockquotes without pulling in external CSS. */
+function MarkdownRender({
   text,
   maxHeight,
 }: {
@@ -91,24 +95,35 @@ function MarkdownLite({
   maxHeight?: number;
 }) {
   if (!text) return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} />;
+
+  const rawHtml = marked.parse(text, { async: false }) as string;
+  const safeHtml = DOMPurify.sanitize(rawHtml, { USE_PROFILES: { html: true } });
+
   return (
     <div
+      // eslint-disable-next-line react/no-danger
+      dangerouslySetInnerHTML={{ __html: safeHtml }}
       style={{
-        whiteSpace: 'pre-wrap',
-        wordBreak: 'break-word',
-        background: '#fafafa',
-        border: '1px solid #f0f0f0',
-        borderRadius: 4,
-        padding: 12,
         maxHeight,
         overflow: maxHeight ? 'auto' : undefined,
         fontSize: 13,
-        lineHeight: 1.6,
+        lineHeight: 1.7,
+        color: 'inherit',
       }}
-    >
-      {text}
-    </div>
+      className="md-render"
+    />
   );
+}
+
+/** @deprecated Use MarkdownRender */
+function MarkdownLite({
+  text,
+  maxHeight,
+}: {
+  text: string;
+  maxHeight?: number;
+}) {
+  return <MarkdownRender text={text} maxHeight={maxHeight} />;
 }
 
 function RawJson({
@@ -1745,6 +1760,16 @@ function GarakScanResult({
   );
 }
 
+/** Typed shape of `evidence_detail` produced by garak Normalizer */
+interface GarakEvidenceDetail {
+  probe_id?: string;
+  detector_name?: string;
+  total_attempts?: number;
+  failures?: number;
+  pass_rate?: number;
+  fail_examples?: Array<{ prompt?: string; response?: string; passed?: boolean }>;
+}
+
 function GarakFindingDetail({
   finding,
   onStatusChange,
@@ -1752,9 +1777,12 @@ function GarakFindingDetail({
   finding: Finding;
   onStatusChange: (s: FindingStatus) => void;
 }) {
+  const detail = finding.evidence_detail as GarakEvidenceDetail | undefined;
+
   return (
     <Space direction="vertical" size={12} style={{ width: '100%' }}>
-      <Descriptions size="small" column={1}>
+      {/* Basic metadata */}
+      <Descriptions size="small" column={1} bordered>
         <Descriptions.Item label="严重度">
           <Tag color={SEVERITY_COLORS[finding.severity] ?? 'default'}>
             {finding.severity.toUpperCase()}
@@ -1768,12 +1796,12 @@ function GarakFindingDetail({
         ) : null}
         {finding.garak_probe_id ? (
           <Descriptions.Item label="Probe">
-            <code>{finding.garak_probe_id}</code>
+            <Typography.Text code>{finding.garak_probe_id}</Typography.Text>
           </Descriptions.Item>
         ) : null}
         {finding.garak_detector_name ? (
           <Descriptions.Item label="Detector">
-            <code>{finding.garak_detector_name}</code>
+            <Typography.Text code>{finding.garak_detector_name}</Typography.Text>
           </Descriptions.Item>
         ) : null}
         <Descriptions.Item label="置信度">
@@ -1793,6 +1821,8 @@ function GarakFindingDetail({
           />
         </Descriptions.Item>
       </Descriptions>
+
+      {/* Evidence summary */}
       {finding.evidence_summary ? (
         <Alert
           type="warning"
@@ -1805,6 +1835,8 @@ function GarakFindingDetail({
           }
         />
       ) : null}
+
+      {/* Fix recommendation */}
       {finding.fix_recommendation ? (
         <Alert
           type="success"
@@ -1817,22 +1849,114 @@ function GarakFindingDetail({
           }
         />
       ) : null}
-      {finding.evidence_detail ? (
-        <Card size="small" title="证据详情">
-          <pre
-            style={{
-              background: '#f6f8fa',
-              padding: 8,
-              borderRadius: 4,
-              margin: 0,
-              maxHeight: 300,
-              overflow: 'auto',
-              fontSize: 12,
-            }}
-          >
-            {JSON.stringify(finding.evidence_detail, null, 2)}
-          </pre>
-        </Card>
+
+      {/* Probe statistics */}
+      {detail ? (
+        <>
+          <Divider style={{ margin: '4px 0' }}>探针统计</Divider>
+          <Row gutter={[12, 12]}>
+            <Col xs={12} sm={6}>
+              <Statistic
+                title="总测试次数"
+                value={detail.total_attempts ?? '-'}
+                valueStyle={{ fontSize: 18 }}
+              />
+            </Col>
+            <Col xs={12} sm={6}>
+              <Statistic
+                title="失败次数"
+                value={detail.failures ?? '-'}
+                valueStyle={{
+                  fontSize: 18,
+                  color: (detail.failures ?? 0) > 0 ? '#ff4d4f' : undefined,
+                }}
+              />
+            </Col>
+            <Col xs={12} sm={6}>
+              <Statistic
+                title="通过率"
+                value={
+                  detail.pass_rate !== undefined
+                    ? `${(detail.pass_rate * 100).toFixed(1)}%`
+                    : '-'
+                }
+                valueStyle={{
+                  fontSize: 18,
+                  color:
+                    detail.pass_rate !== undefined
+                      ? detail.pass_rate >= 0.9
+                        ? '#52c41a'
+                        : detail.pass_rate >= 0.6
+                        ? '#faad14'
+                        : '#ff4d4f'
+                      : undefined,
+                }}
+              />
+            </Col>
+          </Row>
+
+          {/* Fail examples (probe/response conversations) */}
+          {detail.fail_examples && detail.fail_examples.length > 0 ? (
+            <Card
+              size="small"
+              title={`失败样本 (${detail.fail_examples.length} 条)`}
+              type="inner"
+            >
+              <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                {detail.fail_examples.map((ex, i) => (
+                  <Card
+                    key={i}
+                    size="small"
+                    type="inner"
+                    bodyStyle={{ padding: 8 }}
+                    title={
+                      <Space size={6}>
+                        <Tag color="red">样本 #{i + 1}</Tag>
+                      </Space>
+                    }
+                  >
+                    {ex.prompt ? (
+                      <div style={{ marginBottom: 8 }}>
+                        <Tag color="blue" style={{ marginBottom: 4 }}>攻击 Prompt</Tag>
+                        <div
+                          style={{
+                            background: '#f0f5ff',
+                            border: '1px solid #adc6ff',
+                            borderRadius: 4,
+                            padding: '6px 10px',
+                            whiteSpace: 'pre-wrap',
+                            wordBreak: 'break-word',
+                            fontSize: 12,
+                          }}
+                        >
+                          {ex.prompt}
+                        </div>
+                      </div>
+                    ) : null}
+                    {ex.response ? (
+                      <div>
+                        <Tag color="orange" style={{ marginBottom: 4 }}>模型响应</Tag>
+                        <div
+                          style={{
+                            background: '#fff7e6',
+                            border: '1px solid #ffd591',
+                            borderRadius: 4,
+                            padding: '6px 10px',
+                            whiteSpace: 'pre-wrap',
+                            wordBreak: 'break-word',
+                            fontSize: 12,
+                          }}
+                        >
+                          {ex.response}
+                        </div>
+                      </div>
+                    ) : null}
+                  </Card>
+                ))}
+              </Space>
+            </Card>
+          ) : null}
+        </>
       ) : null}
     </Space>
   );
