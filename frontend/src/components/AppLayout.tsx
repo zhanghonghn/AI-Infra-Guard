@@ -144,12 +144,12 @@ export default function AppLayout() {
             alignItems: 'center',
             justifyContent: 'center',
             fontWeight: 600,
-            fontSize: 16,
+            fontSize: 20,
             color: token.colorPrimary,
             borderBottom: `1px solid ${token.colorBorderSecondary}`,
           }}
         >
-          A.I.G
+          A.I.G + 
         </div>
         <Menu
           mode="inline"
@@ -170,13 +170,13 @@ export default function AppLayout() {
             justifyContent: 'space-between',
           }}
         >
-          <Typography.Title level={4} style={{ margin: 0 }}>
-            AI Infrastructure Guard
+          <Typography.Title level={4} style={{ margin: 0,fontSize: 16 }}>
+             AI Infrastructure Guard 增强版安全评估平台
           </Typography.Title>
           <Space size={16}>
-            <Typography.Text type="secondary">
+            {/* <Typography.Text type="secondary">
               {version ? `v${version}` : ''}
-            </Typography.Text>
+            </Typography.Text> */}
             <Typography.Text>
               <UserOutlined /> {username}
             </Typography.Text>

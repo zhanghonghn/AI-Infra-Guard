@@ -65,7 +65,7 @@ export default function Login() {
     >
       <Card style={{ width: '100%', maxWidth: 420 }}>
         <Typography.Title level={3} style={{ marginTop: 0 }}>
-          A.I.G 登录
+          A.I.G + 登录
         </Typography.Title>
         <Typography.Paragraph type="secondary">
           登录后可访问任务管理与知识库功能。

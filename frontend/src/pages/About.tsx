@@ -17,7 +17,7 @@ export default function About() {
   return (
     <Card>
       <PageHeader
-        title="关于 A.I.G"
+        title="关于 A.I.G +"
         description="Tencent Zhuque Lab — AI Infrastructure Guard"
       />
       {loading ? (

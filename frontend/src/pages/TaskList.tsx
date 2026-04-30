@@ -68,34 +68,54 @@ const TASK_TYPE_LABEL_MAP = TASK_TYPE_OPTIONS.reduce<Record<string, string>>(
 
 const STATUS_OPTIONS = [
   { value: '', label: '全部状态' },
-  { value: 'running', label: '运行中' },
-  { value: 'completed', label: '已完成' },
-  { value: 'failed', label: '失败' },
+  { value: 'todo', label: '待处理' },
+  { value: 'doing', label: '运行中' },
+  { value: 'done', label: '已完成' },
+  { value: 'error', label: '失败' },
   { value: 'terminated', label: '已终止' },
 ];
 
 const STATUS_COLORS: Record<string, string> = {
-  pending: 'default',
   todo: 'default',
   doing: 'processing',
-  running: 'processing',
-  completed: 'success',
-  failed: 'error',
+  done: 'success',
+  error: 'error',
   terminated: 'warning',
 };
 
 // Map raw backend status strings to the Chinese labels used in the filter.
 const STATUS_LABEL_MAP: Record<string, string> = {
-  pending:    '等待中',
   todo:       '待处理',
   doing:      '运行中',
-  running:    '运行中',
-  completed:  '已完成',
-  success:    '已完成',
-  failed:     '失败',
+  done:       '已完成',
   error:      '失败',
   terminated: '已终止',
 };
+
+function normalizeTaskStatus(rawStatus: string | undefined): string {
+  const status = (rawStatus || '').toLowerCase();
+  switch (status) {
+    case 'pending':
+    case 'todo':
+      return 'todo';
+    case 'doing':
+    case 'running':
+      return 'doing';
+    case 'done':
+    case 'completed':
+    case 'success':
+      return 'done';
+    case 'failed':
+    case 'error':
+      return 'error';
+    case 'terminated':
+    case 'cancelled':
+    case 'canceled':
+      return 'terminated';
+    default:
+      return status;
+  }
+}
 
 const SEVERITY_COLORS: Record<string, string> = {
   critical: 'magenta',
@@ -131,19 +151,7 @@ function normalizeSev(raw: unknown): string {
 // Map a STATUS_OPTIONS bucket to the set of raw status strings it covers.
 function statusMatches(rowStatus: string | undefined, bucket: string): boolean {
   if (!bucket) return true;
-  const v = (rowStatus || '').toLowerCase();
-  switch (bucket) {
-    case 'running':
-      return v === 'running' || v === 'doing' || v === 'pending' || v === 'todo';
-    case 'completed':
-      return v === 'completed' || v === 'success';
-    case 'failed':
-      return v === 'failed' || v === 'error';
-    case 'terminated':
-      return v === 'terminated';
-    default:
-      return v === bucket;
-  }
+  return normalizeTaskStatus(rowStatus) === bucket;
 }
 
 function formatTime(value: unknown): string {
@@ -170,6 +178,8 @@ export default function TaskList() {
   const [findingsTask, setFindingsTask] = useState<TaskListItem | null>(null);
   const [findings, setFindings] = useState<Finding[]>([]);
   const [findingsLoading, setFindingsLoading] = useState(false);
+  const [riskCountMap, setRiskCountMap] = useState<Record<string, number>>({});
+  const [riskCountLoadingMap, setRiskCountLoadingMap] = useState<Record<string, boolean>>({});
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -282,19 +292,42 @@ export default function TaskList() {
   };
 
   // Findings quick-view: fetch and open drawer.
-  const openFindingsDrawer = async (item: TaskListItem) => {
+  const openFindingsDrawer = useCallback(async (item: TaskListItem) => {
     setFindingsTask(item);
     setFindings([]);
     setFindingsLoading(true);
     try {
       const resp = await listFindings(item.sessionId);
       setFindings(resp?.findings ?? []);
+      setRiskCountMap((prev) => ({
+        ...prev,
+        [item.sessionId]: Number(resp?.total ?? (resp?.findings?.length ?? 0)),
+      }));
     } catch {
       /* handled */
     } finally {
       setFindingsLoading(false);
     }
-  };
+  }, []);
+
+  const loadRiskCount = useCallback(async (item: TaskListItem) => {
+    const sessionId = item.sessionId;
+    if (!sessionId) return;
+    if (riskCountMap[sessionId] !== undefined || riskCountLoadingMap[sessionId]) return;
+
+    setRiskCountLoadingMap((prev) => ({ ...prev, [sessionId]: true }));
+    try {
+      const resp = await listFindings(sessionId);
+      setRiskCountMap((prev) => ({
+        ...prev,
+        [sessionId]: Number(resp?.total ?? (resp?.findings?.length ?? 0)),
+      }));
+    } catch {
+      setRiskCountMap((prev) => ({ ...prev, [sessionId]: 0 }));
+    } finally {
+      setRiskCountLoadingMap((prev) => ({ ...prev, [sessionId]: false }));
+    }
+  }, [riskCountMap, riskCountLoadingMap]);
 
   // Apply client-side status filter on top of server-side text/type filtering
   // so users can narrow down without re-fetching.
@@ -302,6 +335,16 @@ export default function TaskList() {
     () => data.filter((t) => statusMatches(t.status, statusFilter)),
     [data, statusFilter],
   );
+
+  useEffect(() => {
+    const candidates = filtered
+      .slice(0, 20)
+      .filter((item) => riskCountMap[item.sessionId] === undefined && !riskCountLoadingMap[item.sessionId]);
+    if (!candidates.length) return;
+    candidates.forEach((item) => {
+      void loadRiskCount(item);
+    });
+  }, [filtered, loadRiskCount, riskCountMap, riskCountLoadingMap]);
 
   const columns = useMemo<ColumnsType<TaskListItem>>(
     () => [
@@ -329,22 +372,6 @@ export default function TaskList() {
         ),
       },
       {
-        title: '会话 ID',
-        dataIndex: 'sessionId',
-        key: 'sessionId',
-        width: 280,
-        ellipsis: true,
-        render: (v: string) => (
-          <Typography.Text
-            code
-            copyable={{ text: v, tooltips: ['复制', '已复制'] }}
-            style={{ fontSize: 12 }}
-          >
-            {v}
-          </Typography.Text>
-        ),
-      },
-      {
         title: '类型',
         dataIndex: 'taskType',
         key: 'taskType',
@@ -357,9 +384,32 @@ export default function TaskList() {
         key: 'status',
         width: 110,
         render: (v: string) => {
-          const key = (v || '').toLowerCase();
+          const key = normalizeTaskStatus(v);
           const label = STATUS_LABEL_MAP[key] ?? (v || '未知');
           return <Tag color={STATUS_COLORS[key] ?? 'default'}>{label}</Tag>;
+        },
+      },
+      {
+        title: '风险数',
+        key: 'riskCount',
+        width: 90,
+        align: 'center',
+        render: (_v, item) => {
+          const count = riskCountMap[item.sessionId];
+          const loadingCount = riskCountLoadingMap[item.sessionId] && count === undefined;
+          if (loadingCount) {
+            return <Spin size="small" />;
+          }
+          return (
+            <Button
+              size="small"
+              type="link"
+              style={{ padding: 0 }}
+              onClick={() => openFindingsDrawer(item)}
+            >
+              {count ?? 0}
+            </Button>
+          );
         },
       },
       {
@@ -379,7 +429,7 @@ export default function TaskList() {
       {
         title: '操作',
         key: 'actions',
-        width: 280,
+        width: 220,
         render: (_v, item) => (
           <Space size="small" wrap>
             <Link to={`/tasks/${encodeURIComponent(item.sessionId)}`}>
@@ -387,16 +437,6 @@ export default function TaskList() {
                 详情
               </Button>
             </Link>
-            <Tooltip title="快速查看任务的安全问题（Findings）">
-              <Button
-                size="small"
-                type="link"
-                icon={<EyeOutlined />}
-                onClick={() => openFindingsDrawer(item)}
-              >
-                查看问题
-              </Button>
-            </Tooltip>
             <Button size="small" type="link" onClick={() => onClone(item)}>
               克隆
             </Button>
@@ -421,7 +461,7 @@ export default function TaskList() {
     // onClone / onTerminate / onDelete / openFindingsDrawer close over state;
     // re-derive columns when fetchData changes so handlers stay fresh.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [fetchData],
+    [fetchData, openFindingsDrawer, riskCountLoadingMap, riskCountMap],
   );
 
   return (
